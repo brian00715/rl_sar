@@ -333,7 +333,18 @@ void RL_Sim::RunModel()
     {
         this->episode_length_buf += 1;
         this->obs.ang_vel = this->robot_state.imu.gyroscope;
-        this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
+        
+        // Support both velocity (3D) and velocity_pose (6D) commands
+        int num_commands = this->params.Get<int>("num_commands", 3);
+        if (num_commands == 3) {
+            // Standard velocity commands: [vx, vy, vyaw]
+            this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
+        } else if (num_commands == 6) {
+            // Velocity + pose commands: [vx, vy, vyaw, height, roll, pitch]
+            // For keyboard/joystick control, additional pose commands default to 0
+            this->obs.commands = {this->control.x, this->control.y, this->control.yaw, 0.0f, 0.0f, 0.0f};
+        }
+        
         //not currently available for non-ros mujoco version
         // if (this->control.navigation_mode)
         // {

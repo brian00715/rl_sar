@@ -1,16 +1,20 @@
-# Isaac Lab Go2 Velocity Rough - 正确的观测顺序
-# 观测顺序: ang_vel -> gravity_vec -> commands -> dof_pos -> dof_vel -> actions
-# 参考: OBSERVATION_SPACE.md
+# Isaac Lab Go2 Velocity Pose Rough - 训练配置来自 velocity_pose/config/quadruped/unitree_go2/rough_env_cfg.py
+# 观测顺序（无 base_lin_vel，无 height_scan）:
+#   ang_vel (3) + gravity_vec (3) + velocity_pose_commands (6) + dof_pos (12) + dof_vel (12) + actions (12) = 48
+# 
+# velocity_pose_commands 包含 6 维: [lin_vel_x, lin_vel_y, ang_vel_z, height, roll, pitch]
+# 参考: robot_lab/source/robot_lab/robot_lab/tasks/manager_based/locomotion/velocity_pose/
 
-go2/robot_lab:
+go2/robot_lab_pose_velocity:
   robot_name: go2
-  scene_name: robot_lab
+  scene_name: robot_lab_pose_velocity
   loop_rl: 0.02  # 50 Hz control
 
   model_name: "policy.pt"
 
-  # 观测空间配置 - 45维 (与 Isaac Lab 训练时完全一致)
-  num_observations: 45
+  # 观测空间配置 - 48维 (与 Isaac Lab 训练时完全一致)
+  num_observations: 48
+  num_commands: 6  # velocity_pose task: [lin_vel_x, lin_vel_y, ang_vel_z, height, roll, pitch]
   observations: ["ang_vel", "gravity_vec", "commands", "dof_pos", "dof_vel", "actions"]
 
   observations_history: []  # 0 is the latest observation
@@ -24,6 +28,8 @@ go2/robot_lab:
                        100.0, 100.0, 100.0,
                        100.0, 100.0, 100.0,
                        100.0, 100.0, 100.0]
+  
+  # PD 控制增益 - 与训练配置一致
   rl_kp: [20.0, 20.0, 20.0,
           20.0, 20.0, 20.0,
           20.0, 20.0, 20.0,
@@ -40,17 +46,23 @@ go2/robot_lab:
              3.0, 3.0, 3.0,
              3.0, 3.0, 3.0,
              3.0, 3.0, 3.0]
+  
   num_of_dofs: 12
+  
+  # 动作缩放 - hip关节0.125，其他关节0.25 (与训练配置一致)
   action_scale: [0.125, 0.25, 0.25,
                  0.125, 0.25, 0.25,
                  0.125, 0.25, 0.25,
                  0.125, 0.25, 0.25]
+  
   wheel_indices: []
+  
+  # 观测空间缩放因子 - 与训练配置一致
   lin_vel_scale: 2.0
   ang_vel_scale: 0.25
   dof_pos_scale: 1.0
   dof_vel_scale: 0.05
-  commands_scale: [1.0, 1.0, 1.0]
+  commands_scale: [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]  # 6维命令 [vx, vy, vyaw, height, roll, pitch]
   torque_limits: [23.5, 23.5, 23.5,
                   23.5, 23.5, 23.5,
                   23.5, 23.5, 23.5,
