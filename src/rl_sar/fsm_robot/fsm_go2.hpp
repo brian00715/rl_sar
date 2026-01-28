@@ -76,6 +76,11 @@ public:
         }
         rl.now_state = *fsm_state;
         rl.start_state = rl.now_state;
+        
+        // Initialize pose commands when standing up
+        rl.control.height = 0.33f;
+        rl.control.roll = 0.0f;
+        rl.control.pitch = 0.0f;
     }
 
     void Run() override
@@ -188,7 +193,10 @@ public:
 
         if (!rl.rl_init_done) rl.rl_init_done = true;
 
-        std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << std::flush;
+        std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "] "
+                  << "x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw << " "
+                  << "height:" << rl.control.height << " roll:" << rl.control.roll << " pitch:" << rl.control.pitch 
+                  << std::flush;
         RLControl();
     }
 

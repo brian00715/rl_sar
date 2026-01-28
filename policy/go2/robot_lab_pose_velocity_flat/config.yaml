@@ -1,4 +1,4 @@
-# Isaac Lab Go2 Velocity Pose Rough - 训练配置来自 velocity_pose/config/quadruped/unitree_go2/rough_env_cfg.py
+# Isaac Lab Go2 Velocity Pose Flat - 训练配置来自 velocity_pose/config/quadruped/unitree_go2/flat_env_cfg.py
 # 观测顺序（与 robot_lab 相比，commands 从 3维变成7维）:
 #   ang_vel (3) + gravity_vec (3) + velocity_pose_commands (7) + dof_pos (12) + dof_vel (12) + actions (12) = 49
 # 
@@ -6,14 +6,14 @@
 # 注意：第7维 yaw 恒为0，不参与实际控制，仅用于保持观测维度一致性
 # 参考: robot_lab/source/robot_lab/robot_lab/tasks/manager_based/locomotion/velocity_pose/
 
-go2/robot_lab_pose_velocity:
+go2/robot_lab_pose_velocity_flat:
   robot_name: go2
-  scene_name: robot_lab_pose_velocity
+  scene_name: robot_lab_pose_velocity_flat
   loop_rl: 0.02  # 50 Hz control
 
   model_name: "policy.pt"
 
-  # 观测空间配置 - 49维 (与 Isaac Lab 训练时完全一致)
+  # 观测空间配置 - 49维 (与 Isaac Lab flat 训练时完全一致)
   num_observations: 49
   num_commands: 7  # velocity_pose task: [lin_vel_x, lin_vel_y, ang_vel_z, height, roll, pitch, yaw] (yaw恒为0)
   observations: ["ang_vel", "gravity_vec", "commands", "dof_pos", "dof_vel", "actions"]

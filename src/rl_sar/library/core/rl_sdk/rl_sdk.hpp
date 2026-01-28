@@ -119,6 +119,11 @@ struct Control
     float y = 0.0f;
     float yaw = 0.0f;
     bool navigation_mode = false;
+    
+    // Pose control (position, not velocity)
+    float height = 0.0f;  // body height offset [-0.15, 0.15] m
+    float roll = 0.0f;    // body roll [-0.3, 0.3] rad
+    float pitch = 0.0f;   // body pitch [-0.4, 0.4] rad
 
     void SetKeyboard(Input::Keyboard keyboad)
     {

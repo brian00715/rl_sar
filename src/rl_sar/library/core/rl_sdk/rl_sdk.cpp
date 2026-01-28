@@ -58,6 +58,65 @@ void RL::StateController(const RobotState<float>* state, RobotCommand<float>* co
         this->control.yaw = 0.0f;
     }
     
+    // Pose control (position mode - change value directly, not velocity)
+    // Height control: O (up) / U (down) - relative to 0.33m baseline
+    float height_increment = 0.02f;   // 2cm per press
+    float height_baseline = 0.33f;    // Baseline: 33cm
+    float height_min = 0.18f;         // Absolute min: 18cm
+    float height_max = 0.43f;         // Absolute max: 43cm
+    
+    if (this->control.current_keyboard == Input::Keyboard::O)
+    {
+        this->control.height += height_increment;
+        if (this->control.height > height_max) this->control.height = height_max;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::U)
+    {
+        this->control.height -= height_increment;
+        if (this->control.height < height_min) this->control.height = height_min;
+    }
+    
+    // Roll control: J (left/+) / L (right/-)
+    float roll_increment = 0.05f;     // ~3 degrees per press
+    float roll_min = -0.785f;         // -45 degrees (±40° real, trained with margin)
+    float roll_max = 0.785f;          // +45 degrees
+    
+    if (this->control.current_keyboard == Input::Keyboard::J)
+    {
+        this->control.roll += roll_increment;
+        if (this->control.roll > roll_max) this->control.roll = roll_max;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::L)
+    {
+        this->control.roll -= roll_increment;
+        if (this->control.roll < roll_min) this->control.roll = roll_min;
+    }
+    
+    // Pitch control: I (forward/nose down/+) / K (backward/nose up/-)
+    float pitch_increment = 0.05f;    // ~3 degrees per press
+    float pitch_min = -0.436f;        // -25 degrees (±24° real, trained with margin)
+    float pitch_max = 0.436f;         // +25 degrees
+    
+    if (this->control.current_keyboard == Input::Keyboard::I)
+    {
+        this->control.pitch += pitch_increment;
+        if (this->control.pitch > pitch_max) this->control.pitch = pitch_max;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::K)
+    {
+        this->control.pitch -= pitch_increment;
+        if (this->control.pitch < pitch_min) this->control.pitch = pitch_min;
+    }
+    
+    // Reset pose to baseline with 'H' (Home)
+    if (this->control.current_keyboard == Input::Keyboard::H)
+    {
+        this->control.height = height_baseline;  // Reset to 0.33m baseline
+        this->control.roll = 0.0f;
+        this->control.pitch = 0.0f;
+        std::cout << std::endl << LOGGER::INFO << "Pose reset to baseline (height: 0.33m)" << std::endl;
+    }
+    
     // Note: Speed limits removed to allow higher velocity commands
     // Original Isaac Lab training range was [-1.0, 1.0] but user requested unlimited control
     
@@ -117,6 +176,8 @@ std::vector<float> RL::ComputeObservation()
         }
         else if (observation == "commands")
         {
+            // Commands are 7D [vx, vy, vyaw, height, roll, pitch, yaw]
+            // 7th dimension (yaw) is always 0 but included in observation for dimension consistency
             obs_list.push_back(this->obs.commands * this->params.Get<std::vector<float>>("commands_scale"));
         }
         else if (observation == "dof_pos")
