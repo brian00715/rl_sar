@@ -16,6 +16,7 @@
 #include "loop.hpp"
 #include "fsm_go2.hpp"
 #include "fsm_go2w.hpp"
+#include "joystick.hh"
 
 #include <unitree/robot/channel/channel_publisher.hpp>
 #include <unitree/robot/channel/channel_subscriber.hpp>
@@ -46,6 +47,24 @@ using namespace unitree::robot::b2;
 #define TOPIC_JOYSTICK "rt/wirelesscontroller"
 constexpr double PosStopF = (2.146E+9f);
 constexpr double VelStopF = (16000.0f);
+
+// Button state tracking class for joystick buttons
+class Button
+{
+public:
+    Button() {}
+
+    void update(bool state)
+    {
+        on_press = state ? state != pressed : false;
+        on_release = state ? false : state != pressed;
+        pressed = state;
+    }
+
+    bool pressed = false;
+    bool on_press = false;
+    bool on_release = false;
+};
 
 // union for joystick keys
 typedef union
@@ -117,6 +136,17 @@ private:
     ChannelSubscriberPtr<unitree_go::msg::dds_::LowState_> lowstate_subscriber;
     ChannelSubscriberPtr<unitree_go::msg::dds_::WirelessController_> joystick_subscriber;
     xKeySwitchUnion unitree_joy;
+
+    // Xbox joystick support (alternative to unitree wireless controller)
+    std::unique_ptr<Joystick> sys_js;
+    JoystickEvent sys_js_event;
+    Button sys_js_button[20];
+    int sys_js_axis[10] = {0};
+    bool sys_js_active = false;
+    float axis_deadzone = 0.05f;
+    int sys_js_max_value = (1 << (16 - 1));
+    void SetupSysJoystick(const std::string& device, int bits);
+    void GetSysJoystick();
 
     // others
     std::vector<float> mapped_joint_positions;

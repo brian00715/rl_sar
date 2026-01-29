@@ -476,12 +476,19 @@ endif()
 
 # executable for rl real go2
 if(SYSTEM_TYPE STREQUAL "Linux")
-    add_executable(rl_real_go2 src/rl_real_go2.cpp)
+    # Add joystick source
+    set(JOYSTICK_SRC library/thirdparty/joystick/joystick.cc)
+    
+    add_executable(rl_real_go2 src/rl_real_go2.cpp ${JOYSTICK_SRC})
     target_link_libraries(rl_real_go2
         unitree_sdk2
         rl_sdk
         observation_buffer
             ${YAML_CPP_LIBRARIES}
+    )
+    # Add joystick include directory
+    target_include_directories(rl_real_go2 PRIVATE
+        library/thirdparty/joystick
     )
     # Add unitree_sdk2 library path to RPATH
     set_target_properties(rl_real_go2 PROPERTIES

@@ -72,6 +72,9 @@ RL_Real::RL_Real(int argc, char **argv)
         sleep(1);
     }
 
+    // Setup Xbox joystick (alternative to unitree wireless controller)
+    this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick
+
     // loop
     this->loop_keyboard = std::make_shared<LoopFunc>("loop_keyboard", 0.05, std::bind(&RL_Real::KeyboardInterface, this));
     this->loop_control = std::make_shared<LoopFunc>("loop_control", this->params.Get<float>("dt"), std::bind(&RL_Real::RobotControl, this));
@@ -107,43 +110,160 @@ RL_Real::~RL_Real()
 
 void RL_Real::GetState(RobotState<float> *state)
 {
-    if (this->unitree_joy.components.A) this->control.SetGamepad(Input::Gamepad::A);
-    if (this->unitree_joy.components.B) this->control.SetGamepad(Input::Gamepad::B);
-    if (this->unitree_joy.components.X) this->control.SetGamepad(Input::Gamepad::X);
-    if (this->unitree_joy.components.Y) this->control.SetGamepad(Input::Gamepad::Y);
-    if (this->unitree_joy.components.L1) this->control.SetGamepad(Input::Gamepad::LB);
-    if (this->unitree_joy.components.R1) this->control.SetGamepad(Input::Gamepad::RB);
-    if (this->unitree_joy.components.F1) this->control.SetGamepad(Input::Gamepad::LStick);
-    if (this->unitree_joy.components.F2) this->control.SetGamepad(Input::Gamepad::RStick);
-    if (this->unitree_joy.components.up) this->control.SetGamepad(Input::Gamepad::DPadUp);
-    if (this->unitree_joy.components.down) this->control.SetGamepad(Input::Gamepad::DPadDown);
-    if (this->unitree_joy.components.left) this->control.SetGamepad(Input::Gamepad::DPadLeft);
-    if (this->unitree_joy.components.right) this->control.SetGamepad(Input::Gamepad::DPadRight);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.A) this->control.SetGamepad(Input::Gamepad::LB_A);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.B) this->control.SetGamepad(Input::Gamepad::LB_B);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.X) this->control.SetGamepad(Input::Gamepad::LB_X);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.Y) this->control.SetGamepad(Input::Gamepad::LB_Y);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.F1) this->control.SetGamepad(Input::Gamepad::LB_LStick);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.F2) this->control.SetGamepad(Input::Gamepad::LB_RStick);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.up) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.down) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.left) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.right) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.A) this->control.SetGamepad(Input::Gamepad::RB_A);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.B) this->control.SetGamepad(Input::Gamepad::RB_B);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.X) this->control.SetGamepad(Input::Gamepad::RB_X);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.Y) this->control.SetGamepad(Input::Gamepad::RB_Y);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.F1) this->control.SetGamepad(Input::Gamepad::RB_LStick);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.F2) this->control.SetGamepad(Input::Gamepad::RB_RStick);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.up) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.down) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.left) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
-    if (this->unitree_joy.components.R1 && this->unitree_joy.components.right) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
-    if (this->unitree_joy.components.L1 && this->unitree_joy.components.R1) this->control.SetGamepad(Input::Gamepad::LB_RB);
+    // Get Xbox joystick input
+    this->GetSysJoystick();
+    
+    // Process Xbox gamepad buttons (same as MuJoCo simulation)
+    if (this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::A);
+    if (this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::B);
+    if (this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::X);
+    if (this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::Y);
+    if (this->sys_js_button[4].on_press) this->control.SetGamepad(Input::Gamepad::LB);
+    if (this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::RB);
+    if (this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LStick);
+    if (this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RStick);
+    if (this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::DPadUp);
+    if (this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::DPadDown);
+    if (this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::DPadLeft);
+    if (this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::DPadRight);
+    
+    // Combination keys
+    if (this->sys_js_button[4].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
+    if (this->sys_js_button[4].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[0].on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[1].on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[2].on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[3].on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[9].on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
+    if (this->sys_js_button[5].pressed && this->sys_js_button[10].on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[7] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] > 0) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
+    if (this->sys_js_button[5].pressed && this->sys_js_axis[6] < 0) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
+    if (this->sys_js_button[4].pressed && this->sys_js_button[5].on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
 
-    this->control.x = this->joystick.ly();
-    this->control.y = -this->joystick.lx();
-    this->control.yaw = -this->joystick.rx();
+    // Left stick: movement (x, y velocity)
+    float ly = -float(this->sys_js_axis[1]) / float(this->sys_js_max_value);
+    float lx = -float(this->sys_js_axis[0]) / float(this->sys_js_max_value);
+    
+    // Right stick: pose control
+    float rs_x = float(this->sys_js_axis[3]) / float(this->sys_js_max_value);  // right stick horizontal -> roll
+    float rs_y = -float(this->sys_js_axis[4]) / float(this->sys_js_max_value);  // right stick vertical -> pitch
+    
+    // Triggers: yaw angular velocity control (axis[2]=LT, axis[5]=RT)
+    float lt_raw = -float(this->sys_js_axis[2]) / float(this->sys_js_max_value);
+    float rt_raw = -float(this->sys_js_axis[5]) / float(this->sys_js_max_value);
+    
+    // Normalize triggers from [-1, 1] to [0, 1]
+    float lt = (lt_raw < 0) ? 0.0f : lt_raw;
+    float rt = (rt_raw < 0) ? 0.0f : rt_raw;
+    
+    // Apply deadzone to all axes
+    if (std::abs(lx) < 0.1f) lx = 0.0f;
+    if (std::abs(ly) < 0.1f) ly = 0.0f;
+    if (std::abs(rs_x) < 0.1f) rs_x = 0.0f;
+    if (std::abs(rs_y) < 0.1f) rs_y = 0.0f;
+    if (std::abs(lt) < 0.05f) lt = 0.0f;
+    if (std::abs(rt) < 0.05f) rt = 0.0f;
+    
+    float trigger_yaw = rt - lt;  // RT for positive yaw (right turn), LT for negative yaw (left turn)
+
+    bool has_velocity_input = (std::abs(ly) > 0.01f || std::abs(lx) > 0.01f);
+    bool has_yaw_input = (std::abs(trigger_yaw) > 0.01f);
+
+    // Update velocity commands
+    this->control.x = ly;
+    this->control.y = lx;
+    
+    // Update yaw: only non-zero when triggers are pressed
+    if (has_yaw_input)
+    {
+        this->control.yaw = trigger_yaw;
+    }
+    else
+    {
+        this->control.yaw = 0.0f;
+    }
+    
+    // Track if gamepad is active for any velocity input
+    this->sys_js_active = (has_velocity_input || has_yaw_input);
+    
+    // Pose control parameters (same as simulation)
+    float height_increment = 0.02f;   // 2cm per press
+    float height_baseline = 0.33f;    // Baseline: 33cm (not used in runtime but for reference)
+    float height_min = 0.18f;         // Absolute min: 18cm
+    float height_max = 0.43f;         // Absolute max: 43cm
+    
+    float roll_scale = 0.785f;        // Map stick [-1, 1] to ±45°
+    float roll_min = -0.785f;
+    float roll_max = 0.785f;
+    
+    float pitch_scale = 0.436f;       // Map stick [-1, 1] to ±25°
+    float pitch_min = -0.436f;
+    float pitch_max = 0.436f;
+    
+    // Right stick controls roll and pitch directly (proportional control)
+    // rs_x (horizontal left/right) -> roll
+    // rs_y (vertical up/down) -> pitch
+    // When stick is in deadzone, reset to neutral pose
+    if (std::abs(rs_x) > 0.01f || std::abs(rs_y) > 0.01f)
+    {
+        // rs_x (horizontal left/right) -> roll
+        this->control.roll = rs_x * roll_scale;
+        if (this->control.roll < roll_min) this->control.roll = roll_min;
+        if (this->control.roll > roll_max) this->control.roll = roll_max;
+        
+        // rs_y (vertical up/down) -> pitch
+        this->control.pitch = rs_y * pitch_scale;
+        if (this->control.pitch < pitch_min) this->control.pitch = pitch_min;
+        if (this->control.pitch > pitch_max) this->control.pitch = pitch_max;
+    }
+    else
+    {
+        // Reset roll and pitch to neutral when stick is centered
+        this->control.roll = 0.0f;
+        this->control.pitch = 0.0f;
+    }
+    
+    // Shoulder buttons for height control (only when not pressed with other buttons for combos)
+    // RB alone (button[5]): increase height
+    if (this->sys_js_button[5].on_press && 
+        !this->sys_js_button[0].pressed && !this->sys_js_button[1].pressed && 
+        !this->sys_js_button[2].pressed && !this->sys_js_button[3].pressed)
+    {
+        this->control.height += height_increment;
+        if (this->control.height > height_max) this->control.height = height_max;
+        // std::cout << LOGGER::INFO << "Height increased to: " << this->control.height << "m" << std::endl;
+    }
+    
+    // LB alone (button[4]): decrease height
+    if (this->sys_js_button[4].on_press && 
+        !this->sys_js_button[0].pressed && !this->sys_js_button[1].pressed && 
+        !this->sys_js_button[2].pressed && !this->sys_js_button[3].pressed &&
+        !this->sys_js_button[5].pressed)
+    {
+        this->control.height -= height_increment;
+        if (this->control.height < height_min) this->control.height = height_min;
+        // std::cout << LOGGER::INFO << "Height decreased to: " << this->control.height << "m" << std::endl;
+    }
+    
+    // X button (button[2]): reset to default pose (height=0.33m, roll=0, pitch=0)
+    if (this->sys_js_button[2].on_press && 
+        !this->sys_js_button[4].pressed && !this->sys_js_button[5].pressed)
+    {
+        this->control.height = 0.33f;
+        this->control.roll = 0.0f;
+        this->control.pitch = 0.0f;
+        std::cout << LOGGER::INFO << "Pose reset to default: height=0.33m, roll=0°, pitch=0°" << std::endl;
+    }
 
     state->imu.quaternion[0] = this->unitree_low_state.imu_state().quaternion()[0]; // w
     state->imu.quaternion[1] = this->unitree_low_state.imu_state().quaternion()[1]; // x
@@ -387,6 +507,57 @@ std::string RL_Real::QueryServiceName(std::string form, std::string name)
 void RL_Real::LowStateMessageHandler(const void *message)
 {
     this->unitree_low_state = *(unitree_go::msg::dds_::LowState_ *)message;
+}
+
+void RL_Real::SetupSysJoystick(const std::string& device, int bits)
+{
+    this->sys_js = std::make_unique<Joystick>(device);
+    if (!this->sys_js->isFound())
+    {
+        std::cout << LOGGER::WARNING << "Xbox joystick [" << device << "] not found. Will use keyboard control only." << std::endl;
+    }
+    else
+    {
+        std::cout << LOGGER::INFO << "Xbox joystick [" << device << "] initialized successfully." << std::endl;
+    }
+
+    this->sys_js_max_value = (1 << (bits - 1));
+}
+
+void RL_Real::GetSysJoystick()
+{
+    // Clear all button event states
+    for (int i = 0; i < 20; ++i)
+    {
+        this->sys_js_button[i].on_press = false;
+        this->sys_js_button[i].on_release = false;
+    }
+
+    // Check if joystick is valid before using
+    if (!this->sys_js || !this->sys_js->isFound())
+    {
+        return;
+    }
+
+    while (this->sys_js->sample(&this->sys_js_event))
+    {
+        if (this->sys_js_event.isButton())
+        {
+            this->sys_js_button[this->sys_js_event.number].update(this->sys_js_event.value);
+        }
+        else if (this->sys_js_event.isAxis())
+        {
+            double normalized = double(this->sys_js_event.value) / this->sys_js_max_value;
+            if (std::abs(normalized) < this->axis_deadzone)
+            {
+                this->sys_js_axis[this->sys_js_event.number] = 0;
+            }
+            else
+            {
+                this->sys_js_axis[this->sys_js_event.number] = this->sys_js_event.value;
+            }
+        }
+    }
 }
 
 void RL_Real::JoystickHandler(const void *message)
