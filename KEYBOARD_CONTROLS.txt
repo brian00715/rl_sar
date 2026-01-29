@@ -1,0 +1,37 @@
+========================================
+  Go2 键盘控制快速参考
+========================================
+
+速度控制 (Velocity)
+--------------------
+W/S  - 前进/后退 (vx)
+A/D  - 左移/右移 (vy)  
+Q/E  - 左转/右转 (vyaw)
+Space - 停止移动
+
+姿态控制 (Pose) ✨新增✨
+--------------------
+U/O  - 升高/降低身体 (height, 2cm/次)
+J/L  - 左倾/右倾 (roll, 3°/次)
+I/K  - 前倾/后仰 (pitch, 3°/次)
+H    - 复位姿态为中立
+
+系统控制
+--------
+0     - 站起来
+R     - 重置仿真
+Enter - 暂停/继续
+ESC   - 退出
+
+运行命令
+--------
+平地: RL_CONFIG=robot_lab_pose_velocity_flat ./cmake_build/bin/rl_sim_mujoco go2 robot_lab
+台阶: RL_CONFIG=robot_lab_pose_velocity_flat ./cmake_build/bin/rl_sim_mujoco go2 scene
+
+观测输出说明
+------------
+[6-11]: vx vy vyaw height roll pitch
+        速度命令 + 姿态命令 (6维)
+
+详细文档: docs/KEYBOARD_POSE_CONTROL.md
+========================================
