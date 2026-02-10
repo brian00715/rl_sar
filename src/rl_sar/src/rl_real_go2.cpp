@@ -315,12 +315,35 @@ void RL_Real::RunModel()
     {
         this->episode_length_buf += 1;
         this->obs.ang_vel = this->robot_state.imu.gyroscope;
-        this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
+        
+        // Support both 3D velocity commands and 7D velocity_pose commands based on num_commands config
+        int num_commands = this->params.Get<int>("num_commands", 3);
+        if (num_commands == 7)
+        {
+            // 7D velocity_pose commands: [vx, vy, vyaw, height, roll, pitch, yaw]
+            // Last yaw is always 0 for dimension consistency with Isaac Lab training
+            this->obs.commands = {this->control.x, this->control.y, this->control.yaw, 
+                                  this->control.height, this->control.roll, this->control.pitch, 0.0f};
+        }
+        else
+        {
+            // 3D velocity commands: [vx, vy, vyaw]
+            this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
+        }
+        
 #if !defined(USE_CMAKE) && defined(USE_ROS)
         if (this->control.navigation_mode)
         {
-            this->obs.commands = {(float)this->cmd_vel.linear.x, (float)this->cmd_vel.linear.y, (float)this->cmd_vel.angular.z};
-
+            if (num_commands == 7)
+            {
+                // In navigation mode with velocity_pose, use ROS velocity commands but keep pose at neutral
+                this->obs.commands = {(float)this->cmd_vel.linear.x, (float)this->cmd_vel.linear.y, (float)this->cmd_vel.angular.z,
+                                      this->control.height, this->control.roll, this->control.pitch, 0.0f};
+            }
+            else
+            {
+                this->obs.commands = {(float)this->cmd_vel.linear.x, (float)this->cmd_vel.linear.y, (float)this->cmd_vel.angular.z};
+            }
         }
 #endif
         this->obs.base_quat = this->robot_state.imu.quaternion;
