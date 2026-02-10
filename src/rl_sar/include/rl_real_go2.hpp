@@ -136,6 +136,13 @@ private:
     ChannelSubscriberPtr<unitree_go::msg::dds_::LowState_> lowstate_subscriber;
     ChannelSubscriberPtr<unitree_go::msg::dds_::WirelessController_> joystick_subscriber;
     xKeySwitchUnion unitree_joy;
+    
+    // Unitree wireless controller button state tracking
+    Button unitree_btn_R1, unitree_btn_L1, unitree_btn_start, unitree_btn_select;
+    Button unitree_btn_R2, unitree_btn_L2, unitree_btn_F1, unitree_btn_F2;
+    Button unitree_btn_A, unitree_btn_B, unitree_btn_X, unitree_btn_Y;
+    Button unitree_btn_up, unitree_btn_down, unitree_btn_left, unitree_btn_right;
+    bool unitree_joy_active = false;
 
     // Xbox joystick support (alternative to unitree wireless controller)
     std::unique_ptr<Joystick> sys_js;

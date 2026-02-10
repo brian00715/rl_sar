@@ -197,7 +197,7 @@ void RL_Real::GetState(RobotState<float> *state)
     this->sys_js_active = (has_velocity_input || has_yaw_input);
     
     // Pose control parameters (same as simulation)
-    float height_increment = 0.02f;   // 2cm per press
+    float height_increment = 0.005f; // 1cm per press (reduced from 2cm)
     float height_baseline = 0.33f;    // Baseline: 33cm (not used in runtime but for reference)
     float height_min = 0.18f;         // Absolute min: 18cm
     float height_max = 0.43f;         // Absolute max: 43cm
@@ -263,6 +263,146 @@ void RL_Real::GetState(RobotState<float> *state)
         this->control.roll = 0.0f;
         this->control.pitch = 0.0f;
         std::cout << LOGGER::INFO << "Pose reset to default: height=0.33m, roll=0°, pitch=0°" << std::endl;
+    }
+
+    // ==================== Unitree Wireless Controller Processing ====================
+    // Process unitree wireless controller (same button mapping as Xbox)
+    // If unitree controller is active, it will override Xbox inputs
+    
+    // Single button presses
+    if (this->unitree_btn_A.on_press) this->control.SetGamepad(Input::Gamepad::A);
+    if (this->unitree_btn_B.on_press) this->control.SetGamepad(Input::Gamepad::B);
+    if (this->unitree_btn_X.on_press) this->control.SetGamepad(Input::Gamepad::X);
+    if (this->unitree_btn_Y.on_press) this->control.SetGamepad(Input::Gamepad::Y);
+    if (this->unitree_btn_L1.on_press) this->control.SetGamepad(Input::Gamepad::LB);
+    if (this->unitree_btn_R1.on_press) this->control.SetGamepad(Input::Gamepad::RB);
+    if (this->unitree_btn_F1.on_press) this->control.SetGamepad(Input::Gamepad::LStick);
+    if (this->unitree_btn_F2.on_press) this->control.SetGamepad(Input::Gamepad::RStick);
+    if (this->unitree_btn_up.on_press) this->control.SetGamepad(Input::Gamepad::DPadUp);
+    if (this->unitree_btn_down.on_press) this->control.SetGamepad(Input::Gamepad::DPadDown);
+    if (this->unitree_btn_left.on_press) this->control.SetGamepad(Input::Gamepad::DPadLeft);
+    if (this->unitree_btn_right.on_press) this->control.SetGamepad(Input::Gamepad::DPadRight);
+    
+    // Combination keys (L1 + other button)
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_A.on_press) this->control.SetGamepad(Input::Gamepad::LB_A);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_B.on_press) this->control.SetGamepad(Input::Gamepad::LB_B);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_X.on_press) this->control.SetGamepad(Input::Gamepad::LB_X);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_Y.on_press) this->control.SetGamepad(Input::Gamepad::LB_Y);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_F1.on_press) this->control.SetGamepad(Input::Gamepad::LB_LStick);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_F2.on_press) this->control.SetGamepad(Input::Gamepad::LB_RStick);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_up.on_press) this->control.SetGamepad(Input::Gamepad::LB_DPadUp);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_down.on_press) this->control.SetGamepad(Input::Gamepad::LB_DPadDown);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_right.on_press) this->control.SetGamepad(Input::Gamepad::LB_DPadRight);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_left.on_press) this->control.SetGamepad(Input::Gamepad::LB_DPadLeft);
+    
+    // Combination keys (R1 + other button)
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_A.on_press) this->control.SetGamepad(Input::Gamepad::RB_A);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_B.on_press) this->control.SetGamepad(Input::Gamepad::RB_B);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_X.on_press) this->control.SetGamepad(Input::Gamepad::RB_X);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_Y.on_press) this->control.SetGamepad(Input::Gamepad::RB_Y);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_F1.on_press) this->control.SetGamepad(Input::Gamepad::RB_LStick);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_F2.on_press) this->control.SetGamepad(Input::Gamepad::RB_RStick);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_up.on_press) this->control.SetGamepad(Input::Gamepad::RB_DPadUp);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_down.on_press) this->control.SetGamepad(Input::Gamepad::RB_DPadDown);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_right.on_press) this->control.SetGamepad(Input::Gamepad::RB_DPadRight);
+    if (this->unitree_btn_R1.pressed && this->unitree_btn_left.on_press) this->control.SetGamepad(Input::Gamepad::RB_DPadLeft);
+    if (this->unitree_btn_L1.pressed && this->unitree_btn_R1.on_press) this->control.SetGamepad(Input::Gamepad::LB_RB);
+
+    // Get stick values from Unitree wireless controller
+    // 修正方向：ly正值=前进，lx正值=右移，yaw正值=右转
+    float unitree_ly = this->joystick.ly();   // Forward/backward (正值=前进)
+    float unitree_lx = -this->joystick.lx();  // Left/right (正值=右移，需要取反)
+    float unitree_rs_x = this->joystick.rx(); // Right stick horizontal -> roll
+    float unitree_rs_y = -this->joystick.ry(); // Right stick vertical -> pitch (invert)
+    
+    // Apply deadzone to Unitree sticks
+    if (std::abs(unitree_lx) < 0.1f) unitree_lx = 0.0f;
+    if (std::abs(unitree_ly) < 0.1f) unitree_ly = 0.0f;
+    if (std::abs(unitree_rs_x) < 0.1f) unitree_rs_x = 0.0f;
+    if (std::abs(unitree_rs_y) < 0.1f) unitree_rs_y = 0.0f;
+    
+    bool unitree_has_velocity_input = (std::abs(unitree_ly) > 0.01f || std::abs(unitree_lx) > 0.01f);
+    bool unitree_has_pose_input = (std::abs(unitree_rs_x) > 0.01f || std::abs(unitree_rs_y) > 0.01f);
+    
+    // L2/R2 button-based yaw control (按住持续施加yaw角速度，松开则yaw=0)
+    // 宝树遥控器的L2/R2只是按键，不是模拟量
+    float unitree_yaw_command = 0.0f;
+    float yaw_speed = 1.0f;  // yaw angular velocity when button is pressed (rad/s)
+    
+    if (this->unitree_btn_R2.pressed)
+    {
+        unitree_yaw_command = -yaw_speed;  // R2: 右转（负yaw）
+    }
+    else if (this->unitree_btn_L2.pressed)
+    {
+        unitree_yaw_command = yaw_speed;   // L2: 左转（正yaw）
+    }
+    
+    bool unitree_has_yaw_input = (std::abs(unitree_yaw_command) > 0.01f);
+    
+    // Check for height control buttons
+    bool unitree_has_height_input = (this->unitree_btn_R1.pressed || this->unitree_btn_L1.pressed);
+    
+    // Unitree controller is active if ANY control is being used
+    this->unitree_joy_active = (unitree_has_velocity_input || unitree_has_yaw_input || 
+                                unitree_has_pose_input || unitree_has_height_input);
+    
+    // Process Unitree controller inputs (runs even without movement, for pose/height control)
+    // Update velocity commands from Unitree controller
+    this->control.x = unitree_ly;
+    this->control.y = unitree_lx;
+    this->control.yaw = unitree_yaw_command;
+    
+    // Right stick controls roll and pitch (always processed when using Unitree controller)
+    // Reuse roll/pitch scale and limits defined earlier (lines 205-211)
+    if (unitree_has_pose_input)
+    {
+        this->control.roll = unitree_rs_x * roll_scale;
+        if (this->control.roll < roll_min) this->control.roll = roll_min;
+        if (this->control.roll > roll_max) this->control.roll = roll_max;
+        
+        this->control.pitch = -unitree_rs_y * pitch_scale;  // Inverted for correct direction
+        if (this->control.pitch < pitch_min) this->control.pitch = pitch_min;
+        if (this->control.pitch > pitch_max) this->control.pitch = pitch_max;
+    }
+    else if (!this->sys_js_active)  // Only reset if Xbox is also inactive
+    {
+        this->control.roll = 0.0f;
+        this->control.pitch = 0.0f;
+    }
+    
+    // Shoulder buttons for height control (always processed)
+    // Reuse height variables defined earlier (lines 200-203)
+    
+    // R1 alone: increase height
+    if (this->unitree_btn_R1.on_press && 
+        !this->unitree_btn_A.pressed && !this->unitree_btn_B.pressed && 
+        !this->unitree_btn_X.pressed && !this->unitree_btn_Y.pressed)
+    {
+        this->control.height += height_increment;
+        if (this->control.height > height_max) this->control.height = height_max;
+        std::cout << LOGGER::INFO << "[Unitree] Height: " << this->control.height << "m" << std::endl;
+    }
+    
+    // L1 alone: decrease height
+    if (this->unitree_btn_L1.on_press && 
+        !this->unitree_btn_A.pressed && !this->unitree_btn_B.pressed && 
+        !this->unitree_btn_X.pressed && !this->unitree_btn_Y.pressed &&
+        !this->unitree_btn_R1.pressed)
+    {
+        this->control.height -= height_increment;
+        if (this->control.height < height_min) this->control.height = height_min;
+        std::cout << LOGGER::INFO << "[Unitree] Height: " << this->control.height << "m" << std::endl;
+    }
+    
+    // X button: reset to default pose
+    if (this->unitree_btn_X.on_press && 
+        !this->unitree_btn_L1.pressed && !this->unitree_btn_R1.pressed)
+    {
+        this->control.height = 0.33f;
+        this->control.roll = 0.0f;
+        this->control.pitch = 0.0f;
+        std::cout << LOGGER::INFO << "[Unitree] Pose reset to default: height=0.33m, roll=0°, pitch=0°" << std::endl;
     }
 
     state->imu.quaternion[0] = this->unitree_low_state.imu_state().quaternion()[0]; // w
@@ -587,6 +727,24 @@ void RL_Real::JoystickHandler(const void *message)
 {
     joystick = *(unitree_go::msg::dds_::WirelessController_ *)message;
     this->unitree_joy.value = joystick.keys();
+    
+    // Update button states for Unitree wireless controller
+    this->unitree_btn_R1.update(this->unitree_joy.components.R1);
+    this->unitree_btn_L1.update(this->unitree_joy.components.L1);
+    this->unitree_btn_start.update(this->unitree_joy.components.start);
+    this->unitree_btn_select.update(this->unitree_joy.components.select);
+    this->unitree_btn_R2.update(this->unitree_joy.components.R2);
+    this->unitree_btn_L2.update(this->unitree_joy.components.L2);
+    this->unitree_btn_F1.update(this->unitree_joy.components.F1);
+    this->unitree_btn_F2.update(this->unitree_joy.components.F2);
+    this->unitree_btn_A.update(this->unitree_joy.components.A);
+    this->unitree_btn_B.update(this->unitree_joy.components.B);
+    this->unitree_btn_X.update(this->unitree_joy.components.X);
+    this->unitree_btn_Y.update(this->unitree_joy.components.Y);
+    this->unitree_btn_up.update(this->unitree_joy.components.up);
+    this->unitree_btn_down.update(this->unitree_joy.components.down);
+    this->unitree_btn_left.update(this->unitree_joy.components.left);
+    this->unitree_btn_right.update(this->unitree_joy.components.right);
 }
 
 #if !defined(USE_CMAKE) && defined(USE_ROS)
