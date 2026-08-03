@@ -170,6 +170,25 @@ void RL_Sim::GetState(RobotState<float> *state)
             state->motor_state.dq[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + this->params.Get<int>("num_of_dofs")];
             state->motor_state.tau_est[i] = mj_data->sensordata[this->params.Get<std::vector<int>>("joint_mapping")[i] + 2 * this->params.Get<int>("num_of_dofs")];
         }
+
+        // Optional floating-base ground truth. The rl_sar_zoo MJCF sensor block
+        // is ordered jointpos(N), jointvel(N), jointactuatorfrc(N), framequat(4),
+        // gyro(3), accelerometer(3), framepos(3, WORLD), framelinvel(3, WORLD),
+        // so the base state starts at 3N + 10. Stands in for the state
+        // estimator (FAST-LIO) used on hardware.
+        if (this->params.Get<bool>("use_base_state_sensor", false))
+        {
+            const int base_sensor_offset = 3 * this->params.Get<int>("num_of_dofs") + 10;
+            state->base.position[0] = mj_data->sensordata[base_sensor_offset + 0];
+            state->base.position[1] = mj_data->sensordata[base_sensor_offset + 1];
+            state->base.position[2] = mj_data->sensordata[base_sensor_offset + 2];
+            std::vector<float> lin_vel_world = {
+                (float)mj_data->sensordata[base_sensor_offset + 3],
+                (float)mj_data->sensordata[base_sensor_offset + 4],
+                (float)mj_data->sensordata[base_sensor_offset + 5]};
+            // Training observes the base linear velocity in the BODY frame.
+            state->base.lin_vel = QuatRotateInverse(state->imu.quaternion, lin_vel_world);
+        }
     }
 }
 
@@ -342,8 +361,15 @@ void RL_Sim::RunModel()
         this->obs.base_quat = this->robot_state.imu.quaternion;
         this->obs.dof_pos = this->robot_state.motor_state.q;
         this->obs.dof_vel = this->robot_state.motor_state.dq;
+        this->obs.lin_vel = this->robot_state.base.lin_vel;
+        this->obs.base_height = {this->robot_state.base.position[2]};
 
         this->obs.actions = this->Forward();
+        // Policies may drive fewer joints than the robot has (RoboDuet's dog
+        // policy outputs 12 actions for an 18-DoF robot). Zero-pad so every
+        // downstream num_of_dofs-wide loop stays in bounds; the padded joints
+        // hold their default position via a zero entry in action_scale.
+        this->obs.actions.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
 
         if (!this->output_dof_pos.empty())

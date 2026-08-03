@@ -12,6 +12,7 @@
 #include "fsm_d1.hpp"
 #include "fsm_g1.hpp"
 #include "fsm_go2.hpp"
+#include "fsm_go2_x5.hpp"
 #include "fsm_go2w.hpp"
 #include "fsm_gr1t1.hpp"
 #include "fsm_gr1t2.hpp"

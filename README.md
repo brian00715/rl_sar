@@ -1,3 +1,5 @@
+* [ ]
+
 # rl_sar
 
 [![Ubuntu 20.04/22.04](https://img.shields.io/badge/Ubuntu-20.04/22.04-blue.svg?logo=ubuntu)](https://ubuntu.com/)
@@ -26,20 +28,20 @@ This repository provides a framework for simulation verification and physical de
 
 Support List:
 
-|Robot Name (rname:=)|Pre-Trained Policy|Gazebo|Mujoco|Real|
-|-|-|-|-|-|
-|Unitree-A1 (a1)|legged_gym (IsaacGym)|✅|❌|✅|
-|Unitree-Go2 (go2)|himloco (IsaacGym)</br>robot_lab (IsaacSim)|✅|✅|✅</br>✅|
-|Unitree-Go2W (go2w)|robot_lab (IsaacSim)|✅|✅|✅|
-|Unitree-B2 (b2)|robot_lab (IsaacSim)|✅|✅|⚪|
-|Unitree-B2W (b2w)|robot_lab (IsaacSim)|✅|✅|⚪|
-|Unitree-G1 (g1)|robomimic/locomotion (IsaacGym)</br>robomimic/charleston (IsaacGym)</br>whole_body_tracking/dance_102 (IsaacSim)</br>whole_body_tracking/gangnam_style (IsaacSim)|✅|✅|✅|
-|FFTAI-GR1T1 (gr1t1)</br>(Only available on Ubuntu20.04)|legged_gym (IsaacGym)|✅|❌|⚪|
-|FFTAI-GR1T2 (gr1t2)</br>(Only available on Ubuntu20.04)|legged_gym (IsaacGym)|✅|❌|⚪|
-|zhinao-L4W4 (l4w4)|legged_gym (IsaacGym)|✅|❌|✅|
-|Deeprobotics-Lite3 (lite3)|himloco (IsaacGym)|✅|❌|✅|
-|Agibot-D1 (d1)|robot_lab (IsaacSim)|✅|✅|✅|
-|DDTRobot-Tita (tita)|robot_lab (IsaacSim)|✅|❌|⚪|
+| Robot Name (rname:=)                               | Pre-Trained Policy                                                                                                                                 | Gazebo | Mujoco | Real |
+| -------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ------ | ---- |
+| Unitree-A1 (a1)                                    | legged_gym (IsaacGym)                                                                                                                              | ✅     | ❌     | ✅   |
+| Unitree-Go2 (go2)                                  | himloco (IsaacGym)robot_lab (IsaacSim)                                                                                                             | ✅     | ✅     | ✅✅ |
+| Unitree-Go2W (go2w)                                | robot_lab (IsaacSim)                                                                                                                               | ✅     | ✅     | ✅   |
+| Unitree-B2 (b2)                                    | robot_lab (IsaacSim)                                                                                                                               | ✅     | ✅     | ⚪   |
+| Unitree-B2W (b2w)                                  | robot_lab (IsaacSim)                                                                                                                               | ✅     | ✅     | ⚪   |
+| Unitree-G1 (g1)                                    | robomimic/locomotion (IsaacGym)robomimic/charleston (IsaacGym)whole_body_tracking/dance_102 (IsaacSim)whole_body_tracking/gangnam_style (IsaacSim) | ✅     | ✅     | ✅   |
+| FFTAI-GR1T1 (gr1t1)(Only available on Ubuntu20.04) | legged_gym (IsaacGym)                                                                                                                              | ✅     | ❌     | ⚪   |
+| FFTAI-GR1T2 (gr1t2)(Only available on Ubuntu20.04) | legged_gym (IsaacGym)                                                                                                                              | ✅     | ❌     | ⚪   |
+| zhinao-L4W4 (l4w4)                                 | legged_gym (IsaacGym)                                                                                                                              | ✅     | ❌     | ✅   |
+| Deeprobotics-Lite3 (lite3)                         | himloco (IsaacGym)                                                                                                                                 | ✅     | ❌     | ✅   |
+| Agibot-D1 (d1)                                     | robot_lab (IsaacSim)                                                                                                                               | ✅     | ✅     | ✅   |
+| DDTRobot-Tita (tita)                               | robot_lab (IsaacSim)                                                                                                                               | ✅     | ❌     | ⚪   |
 
 > [!IMPORTANT]
 > Python version temporarily suspended maintenance, please use [v2.3](https://github.com/fan-ziqi/rl_sar/releases/tag/v2.3) if necessary, may be re-released in the future.
@@ -250,35 +252,35 @@ Visit [http://robot.robotsfan.com/](http://robot.robotsfan.com/), fill in the IP
 
 ### Control with Gamepad or Keyboard
 
-|Gamepad Control|Keyboard Control|Description|
-|---|---|---|
-|**Basic**|||
-|A|Num0|Move the robot from its initial program pose to the `default_dof_pos` defined in `base.yaml` using position control interpolation|
-|B|Num9|Move the robot from its current position to the initial program pose using position control interpolation|
-|X|N|Toggle navigation mode (disables velocity commands, receives `cmd_vel` topic)|
-|Y|N/A|N/A|
-|**Simulation**|||
-|RB+Y|R|Reset Gazebo environment (stand up fallen robot)|
-|RB+X|Enter|Toggle Gazebo run/stop (default: running state)|
-|**Motor**|||
-|LB+A|M|N/A (Recommended for motor enable)|
-|LB+B|K|N/A (Recommended for motor disable)|
-|LB+X|P|N/A Motor passive mode (`kp=0, kd=8`)|
-|LB+RB|N/A|N/A (Recommended for emergency stop)|
-|**Skill**|||
-|RB+DPadUp|Num1|Basic Locomotion|
-|RB+DPadDown|Num2|Skill 2|
-|RB+DPadLeft|Num3|Skill 3|
-|RB+DPadRight|Num4|Skill 4|
-|LB+DPadUp|Num5|Skill 5|
-|LB+DPadDown|Num6|Skill 6|
-|LB+DPadLeft|Num7|Skill 7|
-|LB+DPadRight|Num8|Skill 8|
-|**Movement**|||
-|LY Axis|W/S|Forward/Backward movement (X-axis)|
-|LX Axis|A/D|Left/Right movement (Y-axis)|
-|RX Axis|Q/E|Yaw rotation|
-|N/A (Release joystick)|Space|Reset all control commands to zero|
+| Gamepad Control        | Keyboard Control | Description                                                                                                                          |
+| ---------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Basic**        |                  |                                                                                                                                      |
+| A                      | Num0             | Move the robot from its initial program pose to the`default_dof_pos` defined in `base.yaml` using position control interpolation |
+| B                      | Num9             | Move the robot from its current position to the initial program pose using position control interpolation                            |
+| X                      | N                | Toggle navigation mode (disables velocity commands, receives`cmd_vel` topic)                                                       |
+| Y                      | N/A              | N/A                                                                                                                                  |
+| **Simulation**   |                  |                                                                                                                                      |
+| RB+Y                   | R                | Reset Gazebo environment (stand up fallen robot)                                                                                     |
+| RB+X                   | Enter            | Toggle Gazebo run/stop (default: running state)                                                                                      |
+| **Motor**        |                  |                                                                                                                                      |
+| LB+A                   | M                | N/A (Recommended for motor enable)                                                                                                   |
+| LB+B                   | K                | N/A (Recommended for motor disable)                                                                                                  |
+| LB+X                   | P                | N/A Motor passive mode (`kp=0, kd=8`)                                                                                              |
+| LB+RB                  | N/A              | N/A (Recommended for emergency stop)                                                                                                 |
+| **Skill**        |                  |                                                                                                                                      |
+| RB+DPadUp              | Num1             | Basic Locomotion                                                                                                                     |
+| RB+DPadDown            | Num2             | Skill 2                                                                                                                              |
+| RB+DPadLeft            | Num3             | Skill 3                                                                                                                              |
+| RB+DPadRight           | Num4             | Skill 4                                                                                                                              |
+| LB+DPadUp              | Num5             | Skill 5                                                                                                                              |
+| LB+DPadDown            | Num6             | Skill 6                                                                                                                              |
+| LB+DPadLeft            | Num7             | Skill 7                                                                                                                              |
+| LB+DPadRight           | Num8             | Skill 8                                                                                                                              |
+| **Movement**     |                  |                                                                                                                                      |
+| LY Axis                | W/S              | Forward/Backward movement (X-axis)                                                                                                   |
+| LX Axis                | A/D              | Left/Right movement (Y-axis)                                                                                                         |
+| RX Axis                | Q/E              | Yaw rotation                                                                                                                         |
+| N/A (Release joystick) | Space            | Reset all control commands to zero                                                                                                   |
 
 ### Real Robots
 
@@ -457,13 +459,12 @@ Deeprobotics Lite3 can be connected using wireless method.
 (Wired not tested. For some versions of Lite3, the wired Ethernet port may requires additional installation.)
 
 - Connect to the Lite3 starting with WIFI broadcasted by the robot. We strongly recommand testing the communication the Lite3 using [Lite3_Motion_SDK](https://github.com/DeepRoboticsLab/Lite3_MotionSDK) before use.
- **(Note: Wireless connection may lead to packet loss, disconnection, or even loss of control, please ensure safety)**
-
+  **(Note: Wireless connection may lead to packet loss, disconnection, or even loss of control, please ensure safety)**
 - Determine the IP address and port number of Lite3, and modify **line 46-48 in rl_sar/src/rl_real_lite3.cpp**.
 - Then Update **jy_exe/conf/network.toml** on the Lite3 motion host to set the IP and port to that of the local machine running ROS2, enabling communication.
 
 > [!CAUTION]
-> **Recheck joint mapping parameters!<br>Recheck rl_sar/policy/himloco/config.yaml. The default joint mapping in Sim2Sim configuration differs from that used in real. If not updated accordingly, this mismatch may lead to incorrect robot behavior and potential safety hazards**
+> **Recheck joint mapping parameters!Recheck rl_sar/policy/himloco/config.yaml. The default joint mapping in Sim2Sim configuration differs from that used in real. If not updated accordingly, this mismatch may lead to incorrect robot behavior and potential safety hazards**
 
 Lite3 also support control using Deeprobotics Retroid gamepad, refer to [Deeprobotics Gamepad](https://github.com/DeepRoboticsLab/gamepad)
 
@@ -497,14 +498,17 @@ D1 can be connected using wireless network.
 **Network Configuration Steps:**
 
 1. SSH into the robot:
+
 ```bash
 ssh firefly@192.168.234.1  # Password: firefly
 ```
 
 2. Modify SDK configuration file:
+
 ```bash
 vim /opt/export/config/sdk_config.yaml
 ```
+
 Change `target_ip` to your PC's IP address (e.g., `192.168.234.2`)
 
 3. Reboot the robot for the configuration to take effect
@@ -536,13 +540,13 @@ Take A1 as an example below
 1. Uncomment `#define CSV_LOGGER` in the top of `rl_real_a1.hpp`. You can also modify the corresponding part in the simulation program to collect simulation data for testing the training process.
 2. Run the control program, and the program will log all data in `src/rl_sar/policy/<ROBOT>/motor.csv`.
 3. Stop the control program and start training the actuator network. Note that `rl_sar/src/rl_sar/policy/` is omitted before the following paths.
-    ```bash
-    rosrun rl_sar actuator_net.py --mode train --data a1/motor.csv --output a1/motor.pt
-    ```
+   ```bash
+   rosrun rl_sar actuator_net.py --mode train --data a1/motor.csv --output a1/motor.pt
+   ```
 4. Verify the trained actuator network.
-    ```bash
-    rosrun rl_sar actuator_net.py --mode play --data a1/motor.csv --output a1/motor.pt
-    ```
+   ```bash
+   rosrun rl_sar actuator_net.py --mode play --data a1/motor.csv --output a1/motor.pt
+   ```
 
 ## Add Your Robot
 

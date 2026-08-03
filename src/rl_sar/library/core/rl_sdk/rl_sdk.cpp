@@ -48,12 +48,59 @@ void RL::StateController(const RobotState<float>* state, RobotCommand<float>* co
     {
         this->control.yaw -= 0.1f;
     }
+    // Body pose commands. Only observed by policies that ask for them
+    // (RoboDuet's roboduet/dog_commands); harmless for every other robot.
+    if (this->control.current_keyboard == Input::Keyboard::T)
+    {
+        this->control.body_pitch += 0.05f;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::G)
+    {
+        this->control.body_pitch -= 0.05f;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::Y)
+    {
+        this->control.body_roll += 0.05f;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::H)
+    {
+        this->control.body_roll -= 0.05f;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::U)
+    {
+        this->control.body_height += 0.02f;
+    }
+    if (this->control.current_keyboard == Input::Keyboard::J)
+    {
+        this->control.body_height -= 0.02f;
+    }
     if (this->control.current_keyboard == Input::Keyboard::Space)
     {
         this->control.x = 0.0f;
         this->control.y = 0.0f;
         this->control.yaw = 0.0f;
+        this->control.body_pitch = 0.0f;
+        this->control.body_roll = 0.0f;
+        this->control.body_height = 0.0f;
     }
+
+    // Clamp every command to the range the policy was trained against.
+    // Absent keys leave the command unclamped, so this is a no-op for robots
+    // whose config does not declare limits.
+    auto clamp_command = [&](float &value, const std::string &key)
+    {
+        if (this->params.Has(key))
+        {
+            auto limit = this->params.Get<std::vector<float>>(key);
+            value = clamp(value, limit[0], limit[1]);
+        }
+    };
+    clamp_command(this->control.x, "limit_vel_x");
+    clamp_command(this->control.y, "limit_vel_y");
+    clamp_command(this->control.yaw, "limit_vel_yaw");
+    clamp_command(this->control.body_pitch, "limit_body_pitch");
+    clamp_command(this->control.body_roll, "limit_body_roll");
+    clamp_command(this->control.body_height, "limit_body_height");
     if (this->control.current_keyboard == Input::Keyboard::N || this->control.current_gamepad == Input::Gamepad::X)
     {
         this->control.navigation_mode = !this->control.navigation_mode;
@@ -109,6 +156,174 @@ std::vector<float> RL::ComputeObservation()
         else if (observation == "actions")
         {
             obs_list.push_back(this->obs.actions);
+        }
+        // ============= RoboDuet Observations =============
+        // RoboDuet's dog policy interleaves leg and arm blocks with command /
+        // gait-clock / tracking blocks, so the generic dof_pos|dof_vel|actions
+        // terms (which always span all num_of_dofs) cannot express it. These
+        // terms slice the leg and arm ranges out explicitly. Layout mirrors
+        // WBCEnv.get_dog_observations() term for term.
+        else if (observation == "roboduet/leg_dof_pos")
+        {
+            const int num_leg_dofs = this->params.Get<int>("num_leg_dofs");
+            auto default_dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
+            std::vector<float> leg_dof_pos_rel(num_leg_dofs);
+            for (int i = 0; i < num_leg_dofs; ++i)
+            {
+                leg_dof_pos_rel[i] = this->obs.dof_pos[i] - default_dof_pos[i];
+            }
+            obs_list.push_back(leg_dof_pos_rel * this->params.Get<float>("dof_pos_scale"));
+        }
+        else if (observation == "roboduet/leg_dof_vel")
+        {
+            const int num_leg_dofs = this->params.Get<int>("num_leg_dofs");
+            std::vector<float> leg_dof_vel(this->obs.dof_vel.begin(), this->obs.dof_vel.begin() + num_leg_dofs);
+            obs_list.push_back(leg_dof_vel * this->params.Get<float>("dof_vel_scale"));
+        }
+        else if (observation == "roboduet/leg_actions")
+        {
+            // obs.actions is zero-padded up to num_of_dofs; the policy only ever
+            // produced the leading num_leg_dofs entries, so slice them back out.
+            const int num_leg_dofs = this->params.Get<int>("num_leg_dofs");
+            obs_list.push_back(std::vector<float>(this->obs.actions.begin(), this->obs.actions.begin() + num_leg_dofs));
+        }
+        else if (observation == "roboduet/arm_dof_pos")
+        {
+            const int num_leg_dofs = this->params.Get<int>("num_leg_dofs");
+            const int num_arm_dofs = this->params.Get<int>("num_arm_dofs");
+            auto default_dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
+            std::vector<float> arm_dof_pos_rel(num_arm_dofs);
+            for (int i = 0; i < num_arm_dofs; ++i)
+            {
+                arm_dof_pos_rel[i] = this->obs.dof_pos[num_leg_dofs + i] - default_dof_pos[num_leg_dofs + i];
+            }
+            obs_list.push_back(arm_dof_pos_rel * this->params.Get<float>("dof_pos_scale"));
+        }
+        else if (observation == "roboduet/arm_dof_vel")
+        {
+            const int num_leg_dofs = this->params.Get<int>("num_leg_dofs");
+            const int num_arm_dofs = this->params.Get<int>("num_arm_dofs");
+            std::vector<float> arm_dof_vel(this->obs.dof_vel.begin() + num_leg_dofs,
+                                           this->obs.dof_vel.begin() + num_leg_dofs + num_arm_dofs);
+            obs_list.push_back(arm_dof_vel * this->params.Get<float>("dof_vel_scale"));
+        }
+        else if (observation == "roboduet/dog_commands")
+        {
+            // [x_vel, y_vel, yaw_vel, body_pitch, body_roll, body_height]
+            // followed, when the policy was trained with dynamic gait, by the
+            // 5 gait commands [gait_frequency, footswing_height, stance_width,
+            // stance_length, gait_duration], held at the constants the export
+            // script recorded in dog_commands_extra.
+            std::vector<float> dog_commands = {
+                this->control.x, this->control.y, this->control.yaw,
+                this->control.body_pitch, this->control.body_roll, this->control.body_height};
+            auto dog_commands_extra = this->params.Get<std::vector<float>>("dog_commands_extra");
+            dog_commands.insert(dog_commands.end(), dog_commands_extra.begin(), dog_commands_extra.end());
+            obs_list.push_back(dog_commands * this->params.Get<std::vector<float>>("dog_commands_scale"));
+        }
+        else if (observation == "roboduet/arm_commands")
+        {
+            // Stage 1 keeps global_switch closed, so the arm command slot is
+            // zero-filled in training. The slot must still occupy its width.
+            obs_list.push_back(std::vector<float>(this->params.Get<int>("arm_num_commands"), 0.0f));
+        }
+        else if (observation == "roboduet/clock_inputs")
+        {
+            // Mirrors LeggedRobot._step_contact_targets(). Stage 1 runs with
+            // use_dynamic_gait=False, so frequency/duration are fixed.
+            const float gait_frequency = this->params.Get<float>("gait_frequency");
+            const float gait_duration = this->params.Get<float>("gait_duration");
+            const float policy_dt = this->params.Get<float>("dt") * this->params.Get<int>("decimation");
+            auto gait_phases = this->params.Get<std::vector<float>>("gait_phases"); // phases, offsets, bounds
+            const float phases = gait_phases[0], offsets = gait_phases[1], bounds = gait_phases[2];
+
+            this->gait_indices = std::fmod(this->gait_indices + policy_dt * gait_frequency, 1.0f);
+
+            std::vector<float> foot_indices = {
+                this->gait_indices + phases + offsets + bounds,
+                this->gait_indices + offsets,
+                this->gait_indices + bounds,
+                this->gait_indices + phases};
+
+            // Training forces the stand phase when the velocity command is tiny.
+            const float command_norm = std::sqrt(this->control.x * this->control.x +
+                                                 this->control.y * this->control.y +
+                                                 this->control.yaw * this->control.yaw);
+            const bool standing = command_norm < 0.1f;
+
+            std::vector<float> clock_inputs(4, 0.0f);
+            for (int i = 0; i < 4; ++i)
+            {
+                float idx = standing ? 0.25f : std::fmod(foot_indices[i], 1.0f);
+                if (idx < 0.0f) idx += 1.0f;
+                idx = (idx < gait_duration)
+                          ? idx * (0.5f / gait_duration)
+                          : 0.5f + (idx - gait_duration) * (0.5f / (1.0f - gait_duration));
+                clock_inputs[i] = std::sin(2.0f * 3.14159265f * idx);
+            }
+            obs_list.push_back(clock_inputs);
+        }
+        else if (observation == "roboduet/base_lin_vel")
+        {
+            // Zero-filled slot when the policy was trained with
+            // dog.observe_lin_vel=False; the width never changes.
+            if (this->params.Get<bool>("observe_lin_vel", true))
+            {
+                obs_list.push_back(this->obs.lin_vel * this->params.Get<float>("lin_vel_scale"));
+            }
+            else
+            {
+                obs_list.push_back(std::vector<float>(3, 0.0f));
+            }
+        }
+        else if (observation == "roboduet/body_pose_actual")
+        {
+            // [base height, pitch, roll] -- note this order differs from the
+            // command order [pitch, roll, height].
+            if (this->params.Get<bool>("observe_pose_actual", true))
+            {
+                std::vector<float> euler = QuaternionToEuler(this->obs.base_quat); // [roll, pitch, yaw]
+                obs_list.push_back(std::vector<float>{
+                    this->obs.base_height[0] * this->params.Get<float>("body_height_cmd_scale"),
+                    euler[1] * this->params.Get<float>("body_pitch_cmd_scale"),
+                    euler[0] * this->params.Get<float>("body_roll_cmd_scale")});
+            }
+            else
+            {
+                obs_list.push_back(std::vector<float>(3, 0.0f));
+            }
+        }
+        else if (observation == "roboduet/body_pose_error")
+        {
+            if (this->params.Get<bool>("observe_track_error", true))
+            {
+                std::vector<float> euler = QuaternionToEuler(this->obs.base_quat);
+                const float height_target = this->params.Get<float>("base_height_target") + this->control.body_height;
+                obs_list.push_back(std::vector<float>{
+                    (height_target - this->obs.base_height[0]) * this->params.Get<float>("body_height_cmd_scale"),
+                    (this->control.body_pitch - euler[1]) * this->params.Get<float>("body_pitch_cmd_scale"),
+                    (this->control.body_roll - euler[0]) * this->params.Get<float>("body_roll_cmd_scale")});
+            }
+            else
+            {
+                obs_list.push_back(std::vector<float>(3, 0.0f));
+            }
+        }
+        else if (observation == "roboduet/velocity_error")
+        {
+            if (this->params.Get<bool>("observe_track_error", true))
+            {
+                const float lin_vel_scale = this->params.Get<float>("lin_vel_scale");
+                const float ang_vel_scale = this->params.Get<float>("ang_vel_scale");
+                obs_list.push_back(std::vector<float>{
+                    (this->control.x - this->obs.lin_vel[0]) * lin_vel_scale,
+                    (this->control.y - this->obs.lin_vel[1]) * lin_vel_scale,
+                    (this->control.yaw - this->obs.ang_vel[2]) * ang_vel_scale});
+            }
+            else
+            {
+                obs_list.push_back(std::vector<float>(3, 0.0f));
+            }
         }
         // ============= Other Observations =============
         else if (observation == "whole_body_tracking/motion_command")
@@ -189,6 +404,7 @@ void RL::InitObservations()
     this->obs.gravity_vec = {0.0f, 0.0f, -1.0f};
     this->obs.commands = {0.0f, 0.0f, 0.0f};
     this->obs.base_quat = {0.0f, 0.0f, 0.0f, 1.0f};
+    this->obs.base_height = {this->params.Get<float>("base_height_target")};
     this->obs.dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
     this->obs.dof_vel.clear();
     this->obs.dof_vel.resize(this->params.Get<int>("num_of_dofs"), 0.0f);
@@ -212,6 +428,9 @@ void RL::InitControl()
     this->control.x = 0.0f;
     this->control.y = 0.0f;
     this->control.yaw = 0.0f;
+    this->control.body_pitch = 0.0f;
+    this->control.body_roll = 0.0f;
+    this->control.body_height = 0.0f;
 }
 
 void RL::InitJointNum(size_t num_joints)

@@ -76,6 +76,15 @@ struct RobotState
             cur.resize(num_joints, 0.0f);
         }
     } motor_state;
+
+    // Floating base state from an external estimator (MuJoCo ground truth in
+    // sim, FAST-LIO / legged odometry on hardware). Stays all-zero for robots
+    // whose policy does not observe it.
+    struct Base
+    {
+        std::vector<T> lin_vel = {0.0f, 0.0f, 0.0f};  // BODY frame, m/s
+        std::vector<T> position = {0.0f, 0.0f, 0.0f}; // WORLD frame, m
+    } base;
 };
 
 namespace Input
@@ -118,6 +127,11 @@ struct Control
     float x = 0.0f;
     float y = 0.0f;
     float yaw = 0.0f;
+    // Body pose commands. Only consumed by policies that observe them
+    // (e.g. RoboDuet's 6-wide dog command vector); ignored otherwise.
+    float body_pitch = 0.0f;
+    float body_roll = 0.0f;
+    float body_height = 0.0f;
     bool navigation_mode = false;
 
     void SetKeyboard(Input::Keyboard keyboad)
@@ -180,6 +194,7 @@ struct Observations
     std::vector<T> dof_pos;
     std::vector<T> dof_vel;
     std::vector<T> actions;
+    std::vector<T> base_height; // single element, WORLD frame z of the base
 };
 
 class RL
@@ -242,6 +257,11 @@ public:
     unsigned long long episode_length_buf = 0;
     float motion_length = 0.0;
     int InverseJointMapping(int idx) const;
+
+    // Gait clock phase accumulator, shared by policies that observe a periodic
+    // gait signal (RoboDuet's clock_inputs). Must be reset to 0 whenever the RL
+    // state is (re-)entered so the phase matches training's reset behaviour.
+    float gait_indices = 0.0f;
 
     // Motion tracking (for mimic/dance tasks)
     std::unique_ptr<MotionLoader> motion_loader;
