@@ -5,25 +5,71 @@
 
 #include "rl_real_go2.hpp"
 
+#include <cmath>
+
+namespace
+{
+template <typename Container>
+bool AllFinite(const Container &values)
+{
+    return std::all_of(values.begin(), values.end(),
+                       [](float value) { return std::isfinite(value); });
+}
+}
+
 RL_Real::RL_Real(int argc, char **argv)
 {
     bool wheel_mode = (argc > 2 && std::string(argv[2]) == "wheel");
+    this->x5_mode_ = (argc > 2 && std::string(argv[2]) == "x5");
+
+    // Read the robot config before constructing observation subscribers: the
+    // Go2-X5 topic names are configurable in policy/go2_x5/base.yaml.
+    this->ang_vel_axis = "body";
+    this->robot_name = this->x5_mode_ ? "go2_x5" : (wheel_mode ? "go2w" : "go2");
+    this->ReadYaml(this->robot_name, "base.yaml");
 
 #if defined(USE_ROS1) && defined(USE_ROS)
     ros::NodeHandle nh;
     this->cmd_vel_subscriber = nh.subscribe<geometry_msgs::Twist>("/cmd_vel", 10, &RL_Real::CmdvelCallback, this);
+    if (this->x5_mode_)
+    {
+        this->lin_vel_subscriber = nh.subscribe<std_msgs::Float32MultiArray>(
+            this->params.Get<std::string>("lin_vel_topic"), 1, &RL_Real::LinVelCallback, this);
+        this->base_height_subscriber = nh.subscribe<std_msgs::Float32>(
+            this->params.Get<std::string>("base_height_topic"), 1, &RL_Real::BaseHeightCallback, this);
+        this->body_pose_subscriber = nh.subscribe<std_msgs::Float32MultiArray>(
+            this->params.Get<std::string>("body_pose_actual_topic"), 1, &RL_Real::BodyPoseCallback, this);
+        this->arm_dof_pos_subscriber = nh.subscribe<std_msgs::Float32MultiArray>(
+            this->params.Get<std::string>("arm_dof_pos_topic"), 1, &RL_Real::ArmDofPosCallback, this);
+        this->arm_dof_vel_subscriber = nh.subscribe<std_msgs::Float32MultiArray>(
+            this->params.Get<std::string>("arm_dof_vel_topic"), 1, &RL_Real::ArmDofVelCallback, this);
+    }
 #elif defined(USE_ROS2) && defined(USE_ROS)
     ros2_node = std::make_shared<rclcpp::Node>("rl_real_node");
     this->cmd_vel_subscriber = ros2_node->create_subscription<geometry_msgs::msg::Twist>(
         "/cmd_vel", rclcpp::SystemDefaultsQoS(),
         [this] (const geometry_msgs::msg::Twist::SharedPtr msg) {this->CmdvelCallback(msg);}
     );
+    if (this->x5_mode_)
+    {
+        const auto qos = rclcpp::SensorDataQoS();
+        this->lin_vel_subscriber = ros2_node->create_subscription<std_msgs::msg::Float32MultiArray>(
+            this->params.Get<std::string>("lin_vel_topic"), qos,
+            [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) { this->LinVelCallback(msg); });
+        this->base_height_subscriber = ros2_node->create_subscription<std_msgs::msg::Float32>(
+            this->params.Get<std::string>("base_height_topic"), qos,
+            [this](const std_msgs::msg::Float32::SharedPtr msg) { this->BaseHeightCallback(msg); });
+        this->body_pose_subscriber = ros2_node->create_subscription<std_msgs::msg::Float32MultiArray>(
+            this->params.Get<std::string>("body_pose_actual_topic"), qos,
+            [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) { this->BodyPoseCallback(msg); });
+        this->arm_dof_pos_subscriber = ros2_node->create_subscription<std_msgs::msg::Float32MultiArray>(
+            this->params.Get<std::string>("arm_dof_pos_topic"), qos,
+            [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) { this->ArmDofPosCallback(msg); });
+        this->arm_dof_vel_subscriber = ros2_node->create_subscription<std_msgs::msg::Float32MultiArray>(
+            this->params.Get<std::string>("arm_dof_vel_topic"), qos,
+            [this](const std_msgs::msg::Float32MultiArray::SharedPtr msg) { this->ArmDofVelCallback(msg); });
+    }
 #endif
-
-    // read params from yaml
-    this->ang_vel_axis = "body";
-    this->robot_name = wheel_mode ? "go2w" : "go2";
-    this->ReadYaml(this->robot_name, "base.yaml");
 
     // auto load FSM by robot_name
     if (FSMManager::GetInstance().IsTypeSupported(this->robot_name))
@@ -154,11 +200,19 @@ void RL_Real::GetState(RobotState<float> *state)
     {
         state->imu.gyroscope[i] = this->unitree_low_state.imu_state().gyroscope()[i];
     }
-    for (int i = 0; i < this->params.Get<int>("num_of_dofs"); ++i)
+    const int unitree_dofs = this->x5_mode_ ? this->params.Get<int>("num_leg_dofs")
+                                           : this->params.Get<int>("num_of_dofs");
+    for (int i = 0; i < unitree_dofs; ++i)
     {
         state->motor_state.q[i] = this->unitree_low_state.motor_state()[this->params.Get<std::vector<int>>("joint_mapping")[i]].q();
         state->motor_state.dq[i] = this->unitree_low_state.motor_state()[this->params.Get<std::vector<int>>("joint_mapping")[i]].dq();
         state->motor_state.tau_est[i] = this->unitree_low_state.motor_state()[this->params.Get<std::vector<int>>("joint_mapping")[i]].tau_est();
+    }
+    if (this->x5_mode_)
+    {
+        // The arm encoders are not part of Go2 LowState. Overlay the most
+        // recent ROS sample into the policy-order motor state.
+        this->CopyExternalObservations(state);
     }
 }
 
@@ -213,6 +267,10 @@ void RL_Real::RunModel()
 {
     if (this->rl_init_done)
     {
+        if (this->x5_mode_ && !this->CopyExternalObservations())
+        {
+            return;
+        }
         this->episode_length_buf += 1;
         this->obs.ang_vel = this->robot_state.imu.gyroscope;
         this->obs.commands = {this->control.x, this->control.y, this->control.yaw};
@@ -228,6 +286,22 @@ void RL_Real::RunModel()
         this->obs.dof_vel = this->robot_state.motor_state.dq;
 
         this->obs.actions = this->Forward();
+        if (this->x5_mode_)
+        {
+            const int num_leg_dofs = this->params.Get<int>("num_leg_dofs");
+            const int num_of_dofs = this->params.Get<int>("num_of_dofs");
+            if (static_cast<int>(this->obs.actions.size()) != num_leg_dofs)
+            {
+                std::cout << std::endl << LOGGER::ERROR
+                          << "[Go2-X5] policy returned " << this->obs.actions.size()
+                          << " actions, expected " << num_leg_dofs << std::endl;
+                return;
+            }
+            // RoboDuet stage 1 controls the 12 legs only. The generic output
+            // path spans all 18 joints, so preserve the policy actions at the
+            // front and explicitly zero-pad the six arm action slots.
+            this->obs.actions.resize(num_of_dofs, 0.0f);
+        }
         this->ComputeOutput(this->obs.actions, this->output_dof_pos, this->output_dof_vel, this->output_dof_tau);
 
         if (!this->output_dof_pos.empty())
@@ -426,7 +500,186 @@ void RL_Real::CmdvelCallback(
 {
     this->cmd_vel = *msg;
 }
+
+void RL_Real::LinVelCallback(
+#if defined(USE_ROS1) && defined(USE_ROS)
+    const std_msgs::Float32MultiArray::ConstPtr &msg
+#elif defined(USE_ROS2) && defined(USE_ROS)
+    const std_msgs::msg::Float32MultiArray::SharedPtr msg
 #endif
+)
+{
+    if (msg->data.size() != 3 || !AllFinite(msg->data))
+    {
+        this->WarnExternalObservations("lin_vel must contain exactly 3 finite floats");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(this->external_obs_mutex_);
+    this->external_obs_.lin_vel.assign(msg->data.begin(), msg->data.end());
+    this->external_obs_.have_lin_vel = true;
+    this->external_obs_.lin_vel_stamp = std::chrono::steady_clock::now();
+}
+
+void RL_Real::BaseHeightCallback(
+#if defined(USE_ROS1) && defined(USE_ROS)
+    const std_msgs::Float32::ConstPtr &msg
+#elif defined(USE_ROS2) && defined(USE_ROS)
+    const std_msgs::msg::Float32::SharedPtr msg
+#endif
+)
+{
+    if (!std::isfinite(msg->data))
+    {
+        this->WarnExternalObservations("base_height must be finite");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(this->external_obs_mutex_);
+    this->external_obs_.base_height = msg->data;
+    this->external_obs_.have_base_height = true;
+    this->external_obs_.base_height_stamp = std::chrono::steady_clock::now();
+}
+
+void RL_Real::BodyPoseCallback(
+#if defined(USE_ROS1) && defined(USE_ROS)
+    const std_msgs::Float32MultiArray::ConstPtr &msg
+#elif defined(USE_ROS2) && defined(USE_ROS)
+    const std_msgs::msg::Float32MultiArray::SharedPtr msg
+#endif
+)
+{
+    if ((msg->data.size() != 2 && msg->data.size() != 3) || !AllFinite(msg->data))
+    {
+        this->WarnExternalObservations("body_pose_actual must contain finite [pitch, roll] or [height, pitch, roll]");
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(this->external_obs_mutex_);
+    const size_t pose_offset = msg->data.size() == 3 ? 1 : 0;
+    if (msg->data.size() == 3)
+    {
+        this->external_obs_.base_height = msg->data[0];
+        this->external_obs_.have_base_height = true;
+        this->external_obs_.base_height_stamp = now;
+    }
+    this->external_obs_.body_pose = {msg->data[pose_offset], msg->data[pose_offset + 1]};
+    this->external_obs_.have_body_pose = true;
+    this->external_obs_.body_pose_stamp = now;
+}
+
+void RL_Real::ArmDofPosCallback(
+#if defined(USE_ROS1) && defined(USE_ROS)
+    const std_msgs::Float32MultiArray::ConstPtr &msg
+#elif defined(USE_ROS2) && defined(USE_ROS)
+    const std_msgs::msg::Float32MultiArray::SharedPtr msg
+#endif
+)
+{
+    const int expected = this->params.Get<int>("num_arm_dofs");
+    if (static_cast<int>(msg->data.size()) != expected || !AllFinite(msg->data))
+    {
+        this->WarnExternalObservations("arm_dof_pos must contain num_arm_dofs finite values");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(this->external_obs_mutex_);
+    this->external_obs_.arm_dof_pos.assign(msg->data.begin(), msg->data.end());
+    this->external_obs_.have_arm_dof_pos = true;
+    this->external_obs_.arm_dof_pos_stamp = std::chrono::steady_clock::now();
+}
+
+void RL_Real::ArmDofVelCallback(
+#if defined(USE_ROS1) && defined(USE_ROS)
+    const std_msgs::Float32MultiArray::ConstPtr &msg
+#elif defined(USE_ROS2) && defined(USE_ROS)
+    const std_msgs::msg::Float32MultiArray::SharedPtr msg
+#endif
+)
+{
+    const int expected = this->params.Get<int>("num_arm_dofs");
+    if (static_cast<int>(msg->data.size()) != expected || !AllFinite(msg->data))
+    {
+        this->WarnExternalObservations("arm_dof_vel must contain num_arm_dofs finite values");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(this->external_obs_mutex_);
+    this->external_obs_.arm_dof_vel.assign(msg->data.begin(), msg->data.end());
+    this->external_obs_.have_arm_dof_vel = true;
+    this->external_obs_.arm_dof_vel_stamp = std::chrono::steady_clock::now();
+}
+#endif
+
+bool RL_Real::CopyExternalObservations(RobotState<float> *state)
+{
+    const auto now = std::chrono::steady_clock::now();
+    std::unique_lock<std::mutex> lock(this->external_obs_mutex_);
+
+    // GetState only merges the separately received arm state. Readiness is
+    // enforced immediately before inference by the state == nullptr path.
+    if (state != nullptr)
+    {
+        const int arm_begin = this->params.Get<int>("num_leg_dofs");
+        if (this->external_obs_.have_arm_dof_pos)
+        {
+            std::copy(this->external_obs_.arm_dof_pos.begin(), this->external_obs_.arm_dof_pos.end(),
+                      state->motor_state.q.begin() + arm_begin);
+        }
+        if (this->external_obs_.have_arm_dof_vel)
+        {
+            std::copy(this->external_obs_.arm_dof_vel.begin(), this->external_obs_.arm_dof_vel.end(),
+                      state->motor_state.dq.begin() + arm_begin);
+        }
+        return true;
+    }
+
+    std::string reason;
+    if (!this->external_obs_.have_lin_vel) reason += " lin_vel";
+    if (!this->external_obs_.have_base_height) reason += " base_height";
+    if (!this->external_obs_.have_body_pose) reason += " body_pose_actual";
+    if (!this->external_obs_.have_arm_dof_pos) reason += " arm_dof_pos";
+    if (!this->external_obs_.have_arm_dof_vel) reason += " arm_dof_vel";
+    if (!reason.empty())
+    {
+        lock.unlock();
+        this->WarnExternalObservations("waiting for:" + reason);
+        return false;
+    }
+
+    const float timeout = this->params.Get<float>("external_obs_timeout", 0.2f);
+    auto stale = [&](const SteadyTime &stamp)
+    {
+        return std::chrono::duration<float>(now - stamp).count() > timeout;
+    };
+    if (stale(this->external_obs_.lin_vel_stamp) ||
+        stale(this->external_obs_.base_height_stamp) ||
+        stale(this->external_obs_.body_pose_stamp) ||
+        stale(this->external_obs_.arm_dof_pos_stamp) ||
+        stale(this->external_obs_.arm_dof_vel_stamp))
+    {
+        lock.unlock();
+        this->WarnExternalObservations("one or more topics exceeded external_obs_timeout");
+        return false;
+    }
+
+    this->obs.lin_vel = this->external_obs_.lin_vel;
+    this->obs.base_height = {this->external_obs_.base_height};
+    this->obs.body_pose_actual = {
+        this->external_obs_.base_height,
+        this->external_obs_.body_pose[0],
+        this->external_obs_.body_pose[1]};
+    return true;
+}
+
+void RL_Real::WarnExternalObservations(const std::string &reason)
+{
+    const auto now = std::chrono::steady_clock::now();
+    std::lock_guard<std::mutex> lock(this->external_obs_mutex_);
+    if (this->last_external_obs_warning_.time_since_epoch().count() == 0 ||
+        std::chrono::duration<float>(now - this->last_external_obs_warning_).count() >= 1.0f)
+    {
+        std::cout << std::endl << LOGGER::WARNING
+                  << "[Go2-X5 Obs] " << reason << "; policy inference paused" << std::endl;
+        this->last_external_obs_warning_ = now;
+    }
+}
 
 #if defined(USE_ROS1) && defined(USE_ROS)
 void signalHandler(int signum)
@@ -448,7 +701,7 @@ int main(int argc, char **argv)
 {
     if (argc < 2)
     {
-        std::cout << LOGGER::ERROR << "Usage: " << argv[0] << " networkInterface [wheel]" << std::endl;
+        std::cout << LOGGER::ERROR << "Usage: " << argv[0] << " networkInterface [wheel|x5]" << std::endl;
         throw std::runtime_error("Invalid arguments");
     }
     ChannelFactory::Instance()->Init(0, argv[1]);

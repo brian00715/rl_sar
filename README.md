@@ -337,6 +337,31 @@ ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ./cmake_build/bin/rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ```
 
+For Go2 + ARX X5 with the RoboDuet policy, start in `x5` mode (a ROS build is
+required; standalone CMake mode has no observation topics):
+
+```bash
+# ROS1 Noetic
+rosrun rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
+
+# ROS2
+ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
+```
+
+The following raw, unscaled observation topics are used by default (names are
+configurable in `policy/go2_x5/base.yaml`):
+
+| Topic | Message type | Layout |
+|---|---|---|
+| `/go2_x5/lin_vel` | `std_msgs/Float32MultiArray` | body-frame `[vx, vy, vz]`, m/s |
+| `/go2_x5/base_height` | `std_msgs/Float32` | world-frame base z, m |
+| `/go2_x5/body_pose_actual` | `std_msgs/Float32MultiArray` | `[pitch, roll]`, rad; `[height, pitch, roll]` is also accepted |
+| `/go2_x5/arm_dof_pos` | `std_msgs/Float32MultiArray` | `x5_joint1..6`, rad |
+| `/go2_x5/arm_dof_vel` | `std_msgs/Float32MultiArray` | `x5_joint1..6`, rad/s |
+
+All five values must be available and continuously updated. Policy inference is
+paused if any input exceeds the default `0.2 s` timeout.
+
 G1(29dofs):
 
 Turn on the robot and lift it up, press L2+R2 to enter the debugging mode, then open a new terminal and start the control program.

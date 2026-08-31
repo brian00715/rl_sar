@@ -335,6 +335,30 @@ ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ./cmake_build/bin/rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ```
 
+Go2 + ARX X5 使用 RoboDuet 策略时，以 `x5` 模式启动（需要 ROS 构建，纯 CMake
+模式没有 observation topic）：
+
+```bash
+# ROS1 Noetic
+rosrun rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
+
+# ROS2
+ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
+```
+
+默认订阅以下原始、未缩放的 observation topic（可在
+`policy/go2_x5/base.yaml` 中修改）：
+
+| Topic | 消息类型 | 数据格式 |
+|---|---|---|
+| `/go2_x5/lin_vel` | `std_msgs/Float32MultiArray` | 机体系 `[vx, vy, vz]`，m/s |
+| `/go2_x5/base_height` | `std_msgs/Float32` | 世界系 base z，m |
+| `/go2_x5/body_pose_actual` | `std_msgs/Float32MultiArray` | `[pitch, roll]`，rad；也接受 `[height, pitch, roll]` |
+| `/go2_x5/arm_dof_pos` | `std_msgs/Float32MultiArray` | `x5_joint1..6`，rad |
+| `/go2_x5/arm_dof_vel` | `std_msgs/Float32MultiArray` | `x5_joint1..6`，rad/s |
+
+五路数据必须齐全且持续更新；任一路超过默认 `0.2 s` 未更新时，程序暂停生成新的策略动作。
+
 G1(29dofs):
 
 开机后将机器人吊起来，按L2+R2进入调试模式，然后新建终端，启动控制程序。

@@ -196,6 +196,10 @@ struct Observations
     std::vector<T> dof_vel;
     std::vector<T> actions;
     std::vector<T> base_height; // single element, WORLD frame z of the base
+    // Optional raw [height (m), pitch (rad), roll (rad)] supplied by an
+    // external estimator. When empty, RoboDuet observations derive the same
+    // values from base_height and base_quat.
+    std::vector<T> body_pose_actual;
 };
 
 class RL

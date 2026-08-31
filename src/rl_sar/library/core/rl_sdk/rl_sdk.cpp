@@ -282,11 +282,20 @@ std::vector<float> RL::ComputeObservation()
             // command order [pitch, roll, height].
             if (this->params.Get<bool>("observe_pose_actual", true))
             {
-                std::vector<float> euler = QuaternionToEuler(this->obs.base_quat); // [roll, pitch, yaw]
+                std::vector<float> pose_actual;
+                if (this->obs.body_pose_actual.size() == 3)
+                {
+                    pose_actual = this->obs.body_pose_actual;
+                }
+                else
+                {
+                    std::vector<float> euler = QuaternionToEuler(this->obs.base_quat); // [roll, pitch, yaw]
+                    pose_actual = {this->obs.base_height[0], euler[1], euler[0]};
+                }
                 obs_list.push_back(std::vector<float>{
-                    this->obs.base_height[0] * this->params.Get<float>("body_height_cmd_scale"),
-                    euler[1] * this->params.Get<float>("body_pitch_cmd_scale"),
-                    euler[0] * this->params.Get<float>("body_roll_cmd_scale")});
+                    pose_actual[0] * this->params.Get<float>("body_height_cmd_scale"),
+                    pose_actual[1] * this->params.Get<float>("body_pitch_cmd_scale"),
+                    pose_actual[2] * this->params.Get<float>("body_roll_cmd_scale")});
             }
             else
             {
@@ -297,12 +306,21 @@ std::vector<float> RL::ComputeObservation()
         {
             if (this->params.Get<bool>("observe_track_error", true))
             {
-                std::vector<float> euler = QuaternionToEuler(this->obs.base_quat);
+                std::vector<float> pose_actual;
+                if (this->obs.body_pose_actual.size() == 3)
+                {
+                    pose_actual = this->obs.body_pose_actual;
+                }
+                else
+                {
+                    std::vector<float> euler = QuaternionToEuler(this->obs.base_quat);
+                    pose_actual = {this->obs.base_height[0], euler[1], euler[0]};
+                }
                 const float height_target = this->params.Get<float>("base_height_target") + this->control.body_height;
                 obs_list.push_back(std::vector<float>{
-                    (height_target - this->obs.base_height[0]) * this->params.Get<float>("body_height_cmd_scale"),
-                    (this->control.body_pitch - euler[1]) * this->params.Get<float>("body_pitch_cmd_scale"),
-                    (this->control.body_roll - euler[0]) * this->params.Get<float>("body_roll_cmd_scale")});
+                    (height_target - pose_actual[0]) * this->params.Get<float>("body_height_cmd_scale"),
+                    (this->control.body_pitch - pose_actual[1]) * this->params.Get<float>("body_pitch_cmd_scale"),
+                    (this->control.body_roll - pose_actual[2]) * this->params.Get<float>("body_roll_cmd_scale")});
             }
             else
             {
@@ -393,6 +411,16 @@ std::vector<float> RL::ComputeObservation()
     {
         obs.insert(obs.end(), obs_vec.begin(), obs_vec.end());
     }
+    if (this->params.Has("num_observations"))
+    {
+        const int expected = this->params.Get<int>("num_observations");
+        if (static_cast<int>(obs.size()) != expected)
+        {
+            throw std::runtime_error(
+                "Observation width mismatch: built " + std::to_string(obs.size()) +
+                ", config expects " + std::to_string(expected));
+        }
+    }
     std::vector<float> clamped_obs = clamp(obs, -this->params.Get<float>("clip_obs"), this->params.Get<float>("clip_obs"));
     return clamped_obs;
 }
@@ -405,6 +433,7 @@ void RL::InitObservations()
     this->obs.commands = {0.0f, 0.0f, 0.0f};
     this->obs.base_quat = {0.0f, 0.0f, 0.0f, 1.0f};
     this->obs.base_height = {this->params.Get<float>("base_height_target")};
+    this->obs.body_pose_actual.clear();
     this->obs.dof_pos = this->params.Get<std::vector<float>>("default_dof_pos");
     this->obs.dof_vel.clear();
     this->obs.dof_vel.resize(this->params.Get<int>("num_of_dofs"), 0.0f);

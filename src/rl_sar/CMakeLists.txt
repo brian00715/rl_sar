@@ -534,12 +534,14 @@ if(SYSTEM_TYPE STREQUAL "Linux")
         INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_CURRENT_SOURCE_DIR}/library/thirdparty/robot_sdk/unitree/unitree_sdk2/thirdparty/lib/${ARCH_DIR}"
     )
     if(NOT USE_CMAKE)
+        target_compile_definitions(rl_real_go2 PRIVATE USE_ROS)
         if($ENV{ROS_DISTRO} MATCHES "noetic")
             target_link_libraries(rl_real_go2 ${catkin_LIBRARIES})
         elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
             ament_target_dependencies(rl_real_go2
                 rclcpp
                 geometry_msgs
+                std_msgs
             )
             install(TARGETS rl_real_go2 DESTINATION lib/${PROJECT_NAME})
         endif()
