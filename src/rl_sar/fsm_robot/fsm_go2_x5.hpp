@@ -9,6 +9,11 @@
 #include "fsm.hpp"
 #include "rl_sdk.hpp"
 
+#ifdef USE_OCS2_BRIDGE
+#include <cmath>
+#include "ocs2_bridge.hpp"
+#endif
+
 // Unitree Go2 carrying a 6-DoF ARX X5 arm, driven by a RoboDuet stage-1 dog
 // policy. 18 actuated joints: 12 legs (policy order FL, FR, RL, RR) followed by
 // x5_joint1..6. The policy only outputs the 12 leg actions; the arm is held at
@@ -122,6 +127,12 @@ public:
             {
                 return "RLFSMStateRLLocomotion";
             }
+#ifdef USE_OCS2_BRIDGE
+            else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
+            {
+                return "RLFSMStateOCS2Manip";
+            }
+#endif
             else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
             {
                 return "RLFSMStateGetDown";
@@ -226,9 +237,340 @@ public:
         {
             return "RLFSMStateGetUp";
         }
+#ifdef USE_OCS2_BRIDGE
+        else if (rl.control.current_keyboard == Input::Keyboard::Num2 || rl.control.current_gamepad == Input::Gamepad::RB_DPadDown)
+        {
+            return "RLFSMStateOCS2Manip";
+        }
+#endif
         return state_name_;
     }
 };
+
+#ifdef USE_OCS2_BRIDGE
+
+// Whole-body manipulation: the same RoboDuet locomotion policy as
+// RLFSMStateRLLocomotion, but with its base commands and the arm joint targets
+// coming from an OCS2 MPC over ZeroMQ instead of the operator.
+//
+// The MPC solves for a 12-DOF model -- a fully actuated floating body carrying
+// the ARX5 arm (go2_x5_ocs2/config/task_floating.info) -- and the bridge on the
+// far side converts its solution into this robot's own conventions, so
+// everything arriving here is directly assignable to rl.control.
+//
+// The link is assumed unreliable. Three tiers of degradation:
+//   OK     -> track the MPC
+//   STALE  -> coast base velocity to zero, freeze the arm where it is
+//   FAULT  -> retract the arm home, then fall back to RLFSMStateRLLocomotion
+class RLFSMStateOCS2Manip : public RLFSMState
+{
+public:
+    RLFSMStateOCS2Manip(RL *rl) : RLFSMState(*rl, "RLFSMStateOCS2Manip") {}
+
+    // Per-tick ceiling on arm joint motion, applied at the FSM rate. Sized well
+    // under the ARX5's own 5.5 rad/s so a bad solve cannot snap the arm.
+    static constexpr float kArmMaxJointSpeed = 1.5f;   // [rad/s]
+    // How long the arm takes to fold back to default_dof_pos on the way out.
+    static constexpr float kRetractSeconds = 1.5f;
+
+    void Enter() override
+    {
+        rl.episode_length_buf = 0;
+        rl.gait_indices = 0.0f;
+        retracting_ = false;
+        retract_percent_ = 0.0f;
+        leave_reason_.clear();
+        next_state_ = state_name_;
+        last_link_ = OCS2Bridge::LinkState::WAITING;
+
+        rl.config_name = "roboduet_stage1";
+        try
+        {
+            rl.InitRL(rl.robot_name + "/" + rl.config_name);
+            rl.now_state = *fsm_state;
+        }
+        catch (const std::exception &e)
+        {
+            std::cout << LOGGER::ERROR << "InitRL() failed: " << e.what() << std::endl;
+            rl.rl_init_done = false;
+            rl.fsm.RequestStateChange("RLFSMStatePassive");
+            return;
+        }
+
+        num_arm_dofs_ = rl.params.Get<int>("num_arm_dofs", 0);
+        arm_begin_ = rl.params.Get<int>("num_of_dofs") - num_arm_dofs_;
+        if (num_arm_dofs_ <= 0 || arm_begin_ < 0)
+        {
+            std::cout << LOGGER::ERROR << "[OCS2] num_arm_dofs missing or inconsistent" << std::endl;
+            rl.fsm.RequestStateChange("RLFSMStateRLLocomotion");
+            return;
+        }
+
+        // Seed the arm target at where the arm actually is, so the first
+        // command cannot step it.
+        arm_target_.assign(num_arm_dofs_, 0.0f);
+        arm_target_dq_.assign(num_arm_dofs_, 0.0f);
+        arm_home_.assign(num_arm_dofs_, 0.0f);
+        auto default_dof_pos = rl.params.Get<std::vector<float>>("default_dof_pos");
+        for (int i = 0; i < num_arm_dofs_; ++i)
+        {
+            arm_target_[i] = fsm_state->motor_state.q[arm_begin_ + i];
+            arm_home_[i] = default_dof_pos[arm_begin_ + i];
+        }
+        retract_from_ = arm_target_;
+        rl.SetExternalArmTarget(arm_target_, arm_target_dq_);
+
+        ZeroBaseCommand();
+
+        OCS2Bridge::Config config;
+        if (!bridge_.Start(config))
+        {
+            std::cout << LOGGER::ERROR << "[OCS2] Bridge failed to start" << std::endl;
+            rl.fsm.RequestStateChange("RLFSMStateRLLocomotion");
+            return;
+        }
+
+        std::cout << LOGGER::NOTE << "Entered OCS2 whole-body manipulation. "
+                  << "Press '1' to hand control back to the operator." << std::endl;
+    }
+
+    void Run() override
+    {
+        if (!rl.rl_init_done) rl.rl_init_done = true;
+
+        PublishState();
+
+        wbc_bridge::CmdMsg cmd{};
+        double age = 0.0;
+        const bool have_cmd = bridge_.GetCommand(cmd, age);
+        const OCS2Bridge::LinkState link = bridge_.Link();
+
+        if (link != last_link_)
+        {
+            std::cout << std::endl << LOGGER::INFO << "[OCS2] Link "
+                      << OCS2Bridge::LinkStateName(last_link_) << " -> "
+                      << OCS2Bridge::LinkStateName(link) << std::endl;
+            last_link_ = link;
+        }
+
+        if (retracting_)
+        {
+            RunRetract();
+        }
+        else if (link == OCS2Bridge::LinkState::OK && have_cmd && cmd.solver_ok)
+        {
+            ApplyCommand(cmd);
+        }
+        else if (link == OCS2Bridge::LinkState::FAULT)
+        {
+            BeginRetract("link lost");
+        }
+        else
+        {
+            // WAITING, STALE, or a solver that has not converged yet: the safe
+            // action is identical -- stop translating, hold the arm still.
+            CoastBaseCommand();
+            std::fill(arm_target_dq_.begin(), arm_target_dq_.end(), 0.0f);
+        }
+
+        rl.SetExternalArmTarget(arm_target_, arm_target_dq_);
+        PrintStatus(link, age);
+        RLControl();
+    }
+
+    void Exit() override
+    {
+        bridge_.Stop();
+        rl.ClearExternalArmTarget();
+        rl.rl_init_done = false;
+        ZeroBaseCommand();
+    }
+
+    std::string CheckChange() override
+    {
+        if (rl.control.current_keyboard == Input::Keyboard::P || rl.control.current_gamepad == Input::Gamepad::LB_X)
+        {
+            // Emergency stop wins over a graceful retract.
+            return "RLFSMStatePassive";
+        }
+        if (!retracting_)
+        {
+            if (rl.control.current_keyboard == Input::Keyboard::Num1 || rl.control.current_gamepad == Input::Gamepad::RB_DPadUp)
+            {
+                BeginRetract("operator");
+                next_state_ = "RLFSMStateRLLocomotion";
+            }
+            else if (rl.control.current_keyboard == Input::Keyboard::Num9 || rl.control.current_gamepad == Input::Gamepad::B)
+            {
+                BeginRetract("operator");
+                next_state_ = "RLFSMStateGetDown";
+            }
+        }
+        if (retracting_ && retract_percent_ >= 1.0f)
+        {
+            return next_state_;
+        }
+        return state_name_;
+    }
+
+private:
+    void ZeroBaseCommand()
+    {
+        rl.control.x = 0.0f;
+        rl.control.y = 0.0f;
+        rl.control.yaw = 0.0f;
+        rl.control.body_pitch = 0.0f;
+        rl.control.body_roll = 0.0f;
+        rl.control.body_height = 0.0f;
+    }
+
+    // Bleed the velocity commands out over ~0.2 s rather than stepping them to
+    // zero, which the policy reads as a hard stop.
+    void CoastBaseCommand()
+    {
+        const float decay = 0.97f;
+        rl.control.x *= decay;
+        rl.control.y *= decay;
+        rl.control.yaw *= decay;
+    }
+
+    void ClampControl(float &value, const std::string &key) const
+    {
+        if (rl.params.Has(key))
+        {
+            auto limit = rl.params.Get<std::vector<float>>(key);
+            value = std::min(std::max(value, limit[0]), limit[1]);
+        }
+    }
+
+    void ApplyCommand(const wbc_bridge::CmdMsg &cmd)
+    {
+        // CMD_MODE_POSE_ONLY is the stage-1 bring-up mode: the bridge has
+        // already zeroed the planar velocity, but zero it here too so a
+        // mislabelled message cannot make the robot walk.
+        const bool drive_planar = (cmd.mode == wbc_bridge::CMD_MODE_FULL);
+        rl.control.x = drive_planar ? cmd.base_lin_vel_body_xy[0] : 0.0f;
+        rl.control.y = drive_planar ? cmd.base_lin_vel_body_xy[1] : 0.0f;
+        rl.control.yaw = cmd.base_ang_vel_body_z;
+        rl.control.body_height = cmd.body_height_cmd;
+        rl.control.body_pitch = cmd.body_pitch_cmd;
+        rl.control.body_roll = cmd.body_roll_cmd;
+
+        // KeyboardInterface() clamps at 20 Hz; this loop writes at the control
+        // rate, so it has to clamp for itself.
+        ClampControl(rl.control.x, "limit_vel_x");
+        ClampControl(rl.control.y, "limit_vel_y");
+        ClampControl(rl.control.yaw, "limit_vel_yaw");
+        ClampControl(rl.control.body_pitch, "limit_body_pitch");
+        ClampControl(rl.control.body_roll, "limit_body_roll");
+        ClampControl(rl.control.body_height, "limit_body_height");
+
+        const float max_step = kArmMaxJointSpeed * rl.params.Get<float>("dt");
+        for (int i = 0; i < num_arm_dofs_; ++i)
+        {
+            const float delta = cmd.arm_q_cmd[i] - arm_target_[i];
+            arm_target_[i] += std::min(std::max(delta, -max_step), max_step);
+            arm_target_dq_[i] = cmd.arm_dq_cmd[i];
+        }
+    }
+
+    void BeginRetract(const std::string &reason)
+    {
+        if (retracting_) return;
+        retracting_ = true;
+        retract_percent_ = 0.0f;
+        retract_from_ = arm_target_;
+        leave_reason_ = reason;
+        if (next_state_ == state_name_)
+        {
+            next_state_ = "RLFSMStateRLLocomotion";
+        }
+        std::cout << std::endl << LOGGER::WARNING << "[OCS2] Retracting arm (" << reason
+                  << "), then -> " << next_state_ << std::endl;
+    }
+
+    void RunRetract()
+    {
+        CoastBaseCommand();
+        rl.control.body_height = 0.0f;
+        rl.control.body_pitch = 0.0f;
+        rl.control.body_roll = 0.0f;
+
+        retract_percent_ += rl.params.Get<float>("dt") / kRetractSeconds;
+        if (retract_percent_ > 1.0f) retract_percent_ = 1.0f;
+        for (int i = 0; i < num_arm_dofs_; ++i)
+        {
+            arm_target_[i] = (1.0f - retract_percent_) * retract_from_[i] + retract_percent_ * arm_home_[i];
+            arm_target_dq_[i] = 0.0f;
+        }
+    }
+
+    void PublishState()
+    {
+        wbc_bridge::StateMsg msg{};
+        for (int i = 0; i < 3; ++i)
+        {
+            msg.base_pos_world[i] = fsm_state->base.position[i];
+            msg.base_lin_vel_body[i] = fsm_state->base.lin_vel[i];
+            msg.base_ang_vel_body[i] = fsm_state->imu.gyroscope[i];
+        }
+        for (int i = 0; i < 4; ++i)
+        {
+            msg.base_quat_wxyz[i] = fsm_state->imu.quaternion[i];
+        }
+        for (int i = 0; i < num_arm_dofs_ && i < wbc_bridge::kNumArmDofs; ++i)
+        {
+            msg.arm_q[i] = fsm_state->motor_state.q[arm_begin_ + i];
+            msg.arm_dq[i] = fsm_state->motor_state.dq[arm_begin_ + i];
+        }
+        for (int i = 0; i < arm_begin_ && i < wbc_bridge::kNumLegDofs; ++i)
+        {
+            msg.leg_q[i] = fsm_state->motor_state.q[i];
+            msg.leg_dq[i] = fsm_state->motor_state.dq[i];
+        }
+        msg.fsm_state_id = 1;
+        msg.bridge_enabled = retracting_ ? 0 : 1;
+        msg.policy_ok = rl.rl_init_done ? 1 : 0;
+        bridge_.PublishState(msg);
+    }
+
+    void PrintStatus(OCS2Bridge::LinkState link, double age)
+    {
+        if (++print_divider_ < 40) return;  // ~5 Hz at the 200 Hz control rate
+        print_divider_ = 0;
+        const auto stats = bridge_.GetStats();
+        std::cout << "\r\033[K" << std::flush << LOGGER::INFO
+                  << "OCS2 [" << OCS2Bridge::LinkStateName(link) << "]"
+                  << (retracting_ ? " RETRACT" : "")
+                  << " age:" << std::fixed << std::setprecision(1) << age * 1e3 << "ms"
+                  << " lat:" << stats.last_latency_s * 1e3 << "ms"
+                  << " rx:" << stats.rx_count << " drop:" << stats.rx_dropped
+                  << " rej:" << stats.rx_rejected
+                  << std::setprecision(2)
+                  << " | x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw
+                  << " h:" << rl.control.body_height
+                  << " arm0:" << arm_target_[0] << std::flush;
+    }
+
+    OCS2Bridge bridge_;
+    OCS2Bridge::LinkState last_link_ = OCS2Bridge::LinkState::WAITING;
+
+    int num_arm_dofs_ = 0;
+    int arm_begin_ = 0;
+    std::vector<float> arm_target_;
+    std::vector<float> arm_target_dq_;
+    std::vector<float> arm_home_;
+    std::vector<float> retract_from_;
+
+    bool retracting_ = false;
+    float retract_percent_ = 0.0f;
+    std::string leave_reason_;
+    std::string next_state_ = "RLFSMStateOCS2Manip";
+
+    int print_divider_ = 0;
+};
+
+#endif // USE_OCS2_BRIDGE
 
 } // namespace go2_x5_fsm
 
@@ -247,6 +589,10 @@ public:
             return std::make_shared<go2_x5_fsm::RLFSMStateGetDown>(rl);
         else if (state_name == "RLFSMStateRLLocomotion")
             return std::make_shared<go2_x5_fsm::RLFSMStateRLLocomotion>(rl);
+#ifdef USE_OCS2_BRIDGE
+        else if (state_name == "RLFSMStateOCS2Manip")
+            return std::make_shared<go2_x5_fsm::RLFSMStateOCS2Manip>(rl);
+#endif
         return nullptr;
     }
     std::string GetType() const override { return "go2_x5"; }
@@ -256,7 +602,10 @@ public:
             "RLFSMStatePassive",
             "RLFSMStateGetUp",
             "RLFSMStateGetDown",
-            "RLFSMStateRLLocomotion"
+            "RLFSMStateRLLocomotion",
+#ifdef USE_OCS2_BRIDGE
+            "RLFSMStateOCS2Manip",
+#endif
         };
     }
     std::string GetInitialState() const override { return initial_state_; }

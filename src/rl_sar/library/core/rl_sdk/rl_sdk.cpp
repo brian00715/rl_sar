@@ -485,8 +485,65 @@ void RL::ComputeOutput(const std::vector<float> &actions, std::vector<float> &ou
     std::vector<float> all_actions_scaled = pos_actions_scaled + vel_actions_scaled;
     output_dof_pos = pos_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos");
     output_dof_vel = vel_actions_scaled;
-    output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * (all_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos") - this->obs.dof_pos) - this->params.Get<std::vector<float>>("rl_kd") * this->obs.dof_vel;
+    std::vector<float> tau_target = all_actions_scaled + this->params.Get<std::vector<float>>("default_dof_pos");
+
+    // Must happen before the torque is formed, so the position loop below tracks
+    // the planner's target rather than default_dof_pos.
+    this->ApplyExternalArmTarget(output_dof_pos, output_dof_vel, tau_target);
+
+    output_dof_tau = this->params.Get<std::vector<float>>("rl_kp") * (tau_target - this->obs.dof_pos) - this->params.Get<std::vector<float>>("rl_kd") * this->obs.dof_vel;
     output_dof_tau = clamp(output_dof_tau, -this->params.Get<std::vector<float>>("torque_limits"), this->params.Get<std::vector<float>>("torque_limits"));
+}
+
+void RL::SetExternalArmTarget(const std::vector<float> &q, const std::vector<float> &dq)
+{
+    const int num_arm_dofs = this->params.Get<int>("num_arm_dofs", 0);
+    if (num_arm_dofs <= 0 || (int)q.size() != num_arm_dofs || (int)dq.size() != num_arm_dofs)
+    {
+        std::cout << LOGGER::ERROR << "SetExternalArmTarget(): expected " << num_arm_dofs
+                  << " joints, got " << q.size() << "/" << dq.size() << std::endl;
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(this->external_arm_mutex_);
+        this->external_arm_q_ = q;
+        this->external_arm_dq_ = dq;
+    }
+    this->use_external_arm_.store(true, std::memory_order_release);
+}
+
+void RL::ClearExternalArmTarget()
+{
+    this->use_external_arm_.store(false, std::memory_order_release);
+}
+
+void RL::ApplyExternalArmTarget(std::vector<float> &output_dof_pos, std::vector<float> &output_dof_vel, std::vector<float> &tau_target)
+{
+    if (!this->use_external_arm_.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    const int num_of_dofs = this->params.Get<int>("num_of_dofs");
+    const int num_arm_dofs = this->params.Get<int>("num_arm_dofs", 0);
+    // Policy order puts the legs first, so the arm is the trailing block.
+    const int arm_begin = num_of_dofs - num_arm_dofs;
+    if (num_arm_dofs <= 0 || arm_begin < 0 || (int)output_dof_pos.size() < num_of_dofs)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(this->external_arm_mutex_);
+    if ((int)this->external_arm_q_.size() != num_arm_dofs)
+    {
+        return;
+    }
+    for (int i = 0; i < num_arm_dofs; ++i)
+    {
+        output_dof_pos[arm_begin + i] = this->external_arm_q_[i];
+        output_dof_vel[arm_begin + i] = this->external_arm_dq_[i];
+        tau_target[arm_begin + i] = this->external_arm_q_[i];
+    }
 }
 
 int RL::InverseJointMapping(int idx) const

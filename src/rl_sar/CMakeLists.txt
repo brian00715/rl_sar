@@ -29,6 +29,10 @@ endif()
 # MuJoCo simulator option
 set(USE_MUJOCO OFF CACHE BOOL "Build with MuJoCo simulator support")
 
+# ZeroMQ link to the OCS2 MPC bridge (go2_x5_ocs2_bridge). Off by default so the
+# stock build needs no libzmq; the OCS2 FSM state is compiled out with it.
+set(USE_OCS2_BRIDGE OFF CACHE BOOL "Build with the OCS2 MPC ZeroMQ bridge")
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -359,8 +363,32 @@ include_directories(
     library/core/motion_loader
     library/core/inference_runtime
     library/core/logger
+    library/core/ocs2_bridge
     fsm_robot
 )
+
+# library for the OCS2 MPC bridge
+if(USE_OCS2_BRIDGE)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(ZMQ REQUIRED libzmq)
+
+    add_library(ocs2_bridge library/core/ocs2_bridge/ocs2_bridge.cpp)
+    target_include_directories(ocs2_bridge PUBLIC
+        library/core/ocs2_bridge
+        library/core/logger
+        ${ZMQ_INCLUDE_DIRS}
+    )
+    target_link_libraries(ocs2_bridge PUBLIC ${ZMQ_LIBRARIES} Threads::Threads)
+    target_link_directories(ocs2_bridge PUBLIC ${ZMQ_LIBRARY_DIRS})
+    # Compiled into every consumer so fsm_go2_x5.hpp can gate the OCS2 state.
+    target_compile_definitions(ocs2_bridge PUBLIC USE_OCS2_BRIDGE)
+
+    if(NOT USE_CMAKE)
+        if($ENV{ROS_DISTRO} MATCHES "foxy|humble")
+            install(TARGETS ocs2_bridge DESTINATION lib/${PROJECT_NAME})
+        endif()
+    endif()
+endif()
 
 # library for inference runtime
 add_library(inference_runtime library/core/inference_runtime/inference_runtime.cpp)
@@ -712,6 +740,10 @@ if(USE_MUJOCO)
         Threads::Threads mujoco_prebuilt glfw
     )
 
+    if(USE_OCS2_BRIDGE)
+        target_link_libraries(rl_sim_mujoco ocs2_bridge)
+    endif()
+
     # macOS specific frameworks and libraries
     if(SYSTEM_TYPE STREQUAL "Darwin")
         # OpenMP support
@@ -791,5 +823,9 @@ message(STATUS "Simulator Configuration:")
 message(STATUS "USE_MUJOCO: ${USE_MUJOCO}")
 if(USE_MUJOCO)
     message(STATUS "MuJoCo: Enabled")
+endif()
+message(STATUS "USE_OCS2_BRIDGE: ${USE_OCS2_BRIDGE}")
+if(USE_OCS2_BRIDGE)
+    message(STATUS "ZeroMQ version: ${ZMQ_VERSION}")
 endif()
 message(STATUS "========================================")

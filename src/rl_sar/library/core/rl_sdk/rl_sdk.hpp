@@ -16,6 +16,7 @@
 #include <memory>
 #include <fstream>
 #include <mutex>
+#include <atomic>
 
 #include <yaml-cpp/yaml.h>
 #include "fsm.hpp"
@@ -266,6 +267,16 @@ public:
     // Motion tracking (for mimic/dance tasks)
     std::unique_ptr<MotionLoader> motion_loader;
 
+    // ---- External arm target ----
+    // An off-policy planner (the OCS2 MPC bridge) driving the arm joints while
+    // the locomotion policy keeps the legs. Those joints carry a zero
+    // action_scale, so without this ComputeOutput would park them at
+    // default_dof_pos forever. The targets are consumed verbatim: rate limiting
+    // and joint-limit clamping belong to the producer, which knows its own rate.
+    // Indices are policy order, i.e. the last num_arm_dofs entries.
+    void SetExternalArmTarget(const std::vector<float> &q, const std::vector<float> &dq);
+    void ClearExternalArmTarget();
+
     // protect func
     void TorqueProtect(const std::vector<float> &origin_output_dof_tau);
     void AttitudeProtect(const std::vector<float> &quaternion, float pitch_threshold, float roll_threshold);
@@ -279,6 +290,18 @@ public:
 
     // thread safety
     std::mutex model_mutex;
+
+private:
+    // Written by the bridge thread, read by the RL thread in ComputeOutput.
+    mutable std::mutex external_arm_mutex_;
+    std::vector<float> external_arm_q_;
+    std::vector<float> external_arm_dq_;
+    std::atomic<bool> use_external_arm_{false};
+
+    /** Substitutes the external arm target into an in-flight ComputeOutput. */
+    void ApplyExternalArmTarget(std::vector<float> &output_dof_pos,
+                                std::vector<float> &output_dof_vel,
+                                std::vector<float> &tau_target);
 };
 
 class RLFSMState : public FSMState
