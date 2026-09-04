@@ -8,14 +8,11 @@
 
 // #define PLOT
 // #define CSV_LOGGER
-// #define USE_ROS
-
 #include "rl_sdk.hpp"
 #include "observation_buffer.hpp"
 #include "inference_runtime.hpp"
 #include "loop.hpp"
 #include "fsm_go2.hpp"
-#include "fsm_go2_x5.hpp"
 #include "fsm_go2w.hpp"
 
 #include <unitree/robot/channel/channel_publisher.hpp>
@@ -27,19 +24,6 @@
 #include <unitree/common/thread/thread.hpp>
 #include <unitree/robot/b2/motion_switcher/motion_switcher_client.hpp>
 #include <csignal>
-#include <chrono>
-
-#if defined(USE_ROS1) && defined(USE_ROS)
-#include <ros/ros.h>
-#include <geometry_msgs/Twist.h>
-#include <std_msgs/Float32.h>
-#include <std_msgs/Float32MultiArray.h>
-#elif defined(USE_ROS2) && defined(USE_ROS)
-#include <rclcpp/rclcpp.hpp>
-#include <geometry_msgs/msg/twist.hpp>
-#include <std_msgs/msg/float32.hpp>
-#include <std_msgs/msg/float32_multi_array.hpp>
-#endif
 
 #include "matplotlibcpp.h"
 namespace plt = matplotlibcpp;
@@ -84,32 +68,7 @@ public:
     RL_Real(int argc, char **argv);
     ~RL_Real();
 
-#if defined(USE_ROS2) && defined(USE_ROS)
-    std::shared_ptr<rclcpp::Node> ros2_node;
-#endif
-
 private:
-    using SteadyTime = std::chrono::steady_clock::time_point;
-
-    struct ExternalObservationState
-    {
-        std::vector<float> lin_vel = std::vector<float>(3, 0.0f);
-        float base_height = 0.0f;
-        std::vector<float> body_pose = std::vector<float>(2, 0.0f); // pitch, roll
-        std::vector<float> arm_dof_pos;
-        std::vector<float> arm_dof_vel;
-        bool have_lin_vel = false;
-        bool have_base_height = false;
-        bool have_body_pose = false;
-        bool have_arm_dof_pos = false;
-        bool have_arm_dof_vel = false;
-        SteadyTime lin_vel_stamp;
-        SteadyTime base_height_stamp;
-        SteadyTime body_pose_stamp;
-        SteadyTime arm_dof_pos_stamp;
-        SteadyTime arm_dof_vel_stamp;
-    };
-
     // rl functions
     std::vector<float> Forward() override;
     void GetState(RobotState<float> *state) override;
@@ -148,42 +107,6 @@ private:
     // others
     std::vector<float> mapped_joint_positions;
     std::vector<float> mapped_joint_velocities;
-    bool x5_mode_ = false;
-    mutable std::mutex external_obs_mutex_;
-    ExternalObservationState external_obs_;
-    SteadyTime last_external_obs_warning_{};
-    bool CopyExternalObservations(RobotState<float> *state = nullptr);
-    void WarnExternalObservations(const std::string &reason);
-
-#if defined(USE_ROS1) && defined(USE_ROS)
-    geometry_msgs::Twist cmd_vel;
-    ros::Subscriber cmd_vel_subscriber;
-    ros::Subscriber lin_vel_subscriber;
-    ros::Subscriber base_height_subscriber;
-    ros::Subscriber body_pose_subscriber;
-    ros::Subscriber arm_dof_pos_subscriber;
-    ros::Subscriber arm_dof_vel_subscriber;
-    void CmdvelCallback(const geometry_msgs::Twist::ConstPtr &msg);
-    void LinVelCallback(const std_msgs::Float32MultiArray::ConstPtr &msg);
-    void BaseHeightCallback(const std_msgs::Float32::ConstPtr &msg);
-    void BodyPoseCallback(const std_msgs::Float32MultiArray::ConstPtr &msg);
-    void ArmDofPosCallback(const std_msgs::Float32MultiArray::ConstPtr &msg);
-    void ArmDofVelCallback(const std_msgs::Float32MultiArray::ConstPtr &msg);
-#elif defined(USE_ROS2) && defined(USE_ROS)
-    geometry_msgs::msg::Twist cmd_vel;
-    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr lin_vel_subscriber;
-    rclcpp::Subscription<std_msgs::msg::Float32>::SharedPtr base_height_subscriber;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr body_pose_subscriber;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr arm_dof_pos_subscriber;
-    rclcpp::Subscription<std_msgs::msg::Float32MultiArray>::SharedPtr arm_dof_vel_subscriber;
-    void CmdvelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
-    void LinVelCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
-    void BaseHeightCallback(const std_msgs::msg::Float32::SharedPtr msg);
-    void BodyPoseCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
-    void ArmDofPosCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
-    void ArmDofVelCallback(const std_msgs::msg::Float32MultiArray::SharedPtr msg);
-#endif
 };
 
 #endif // RL_REAL_GO2_HPP

@@ -163,6 +163,7 @@ struct Control
 struct YamlParams
 {
     YAML::Node config_node;
+    mutable std::mutex mutex;
 
     // Get config value by key
     // WARNING: For vectors/containers, store result in a variable before using iterators/references:
@@ -171,16 +172,26 @@ struct YamlParams
     template<typename T>
     T Get(const std::string& key, const T& default_value = T()) const
     {
-        if (config_node[key])
+        std::lock_guard<std::mutex> lock(mutex);
+        const YAML::Node value = config_node[key];
+        if (value && value.IsDefined())
         {
-            return config_node[key].as<T>();
+            return value.as<T>();
         }
         return default_value;
     }
 
     bool Has(const std::string& key) const
     {
-        return config_node[key].IsDefined();
+        std::lock_guard<std::mutex> lock(mutex);
+        const YAML::Node value = config_node[key];
+        return value && value.IsDefined();
+    }
+
+    void Set(const std::string& key, const YAML::Node& value)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        config_node[key] = YAML::Clone(value);
     }
 };
 

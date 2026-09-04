@@ -54,12 +54,8 @@ go2_x5:
   # MuJoCo only: read framelinvel + framepos appended after the gyro, standing
   # in for the FAST-LIO state estimate used on hardware.
   use_base_state_sensor: true
-  # Real-robot observation topics. Values are raw SI units; policy scaling is
-  # applied in ComputeObservation(). body_pose accepts [pitch, roll] or
-  # [height, pitch, roll]. Arm arrays must be x5_joint1..x5_joint6 order.
+  # Real-robot state estimate. Odometry twist.linear must be expressed in the
+  # robot body frame; pose.position.z is the world-frame base height. The X5
+  # joint observation slots are zero-filled for this stage-1 leg-only policy.
   external_obs_timeout: 0.2
-  lin_vel_topic: "/go2_x5/lin_vel"
-  base_height_topic: "/go2_x5/base_height"
-  body_pose_actual_topic: "/go2_x5/body_pose_actual"
-  arm_dof_pos_topic: "/go2_x5/arm_dof_pos"
-  arm_dof_vel_topic: "/go2_x5/arm_dof_vel"
+  odometry_topic: "/odometry/filtered"

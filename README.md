@@ -329,38 +329,47 @@ Open a new terminal and start the control program. If you are controlling Go2W, 
 source devel/setup.bash
 rosrun rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 
-# ROS2
+# ROS2 (pure ROS 2 transport; the interface comes from CYCLONEDDS_URI)
+source /home/unitree/ros_workspaces/unitree_ros2/setup.sh
 source install/setup.bash
-ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
+ros2 run rl_sar rl_real_go2_ros2 [wheel]
 
 # CMake
 ./cmake_build/bin/rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ```
 
-For Go2 + ARX X5 with the RoboDuet policy, start in `x5` mode (a ROS build is
-required; standalone CMake mode has no observation topics):
+For Go2 + ARX X5 with the RoboDuet policy, use the pure ROS 2 backend in `x5`
+mode:
 
 ```bash
-# ROS1 Noetic
-rosrun rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
-
-# ROS2
-ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
+source /home/unitree/ros_workspaces/unitree_ros2/setup.sh
+export ROS_DOMAIN_ID=0
+source install/setup.bash
+ros2 run rl_sar rl_real_go2_ros2 x5
 ```
 
-The following raw, unscaled observation topics are used by default (names are
-configurable in `policy/go2_x5/base.yaml`):
+`rl_real_go2_ros2` is a standalone pure ROS 2 backend. It accesses `/lowcmd`,
+`/lowstate`, `/wirelesscontroller`, and the motion switcher directly through
+the `unitree_go` and `unitree_api` interfaces, without loading Unitree SDK's
+ChannelFactory. The robot and all other ROS 2 nodes can therefore stay in
+domain 0. The original `rl_real_go2 <NETWORK_INTERFACE> [wheel]` remains a
+Unitree-SDK-only backend and does not subscribe to ROS topics.
 
-| Topic | Message type | Layout |
-|---|---|---|
-| `/go2_x5/lin_vel` | `std_msgs/Float32MultiArray` | body-frame `[vx, vy, vz]`, m/s |
-| `/go2_x5/base_height` | `std_msgs/Float32` | world-frame base z, m |
-| `/go2_x5/body_pose_actual` | `std_msgs/Float32MultiArray` | `[pitch, roll]`, rad; `[height, pitch, roll]` is also accepted |
-| `/go2_x5/arm_dof_pos` | `std_msgs/Float32MultiArray` | `x5_joint1..6`, rad |
-| `/go2_x5/arm_dof_vel` | `std_msgs/Float32MultiArray` | `x5_joint1..6`, rad/s |
+Startup requires a valid `/lowstate`. The motion switcher is then queried and
+an active mode is released. If the switcher does not respond because the
+built-in motion service has already been stopped, startup continues with a
+warning; verify that the built-in controller is actually disabled before
+enabling the policy.
 
-All five values must be available and continuously updated. Policy inference is
-paused if any input exceeds the default `0.2 s` timeout.
+The real-robot state estimate is read from `/odometry/filtered`
+(`nav_msgs/Odometry`; configurable with `odometry_topic` in
+`policy/go2_x5/base.yaml`). `twist.twist.linear` must contain body-frame
+`[vx, vy, vz]`, `pose.pose.position.z` is used as the world-frame base height,
+and `pose.pose.orientation` provides pitch and roll. Gravity and angular
+velocity continue to come from the Go2 IMU. The six reserved X5 joint position
+and velocity observation slots are zero-filled, and no X5 motor commands are
+sent. Policy inference is paused when odometry exceeds the default `0.2 s`
+timeout.
 
 G1(29dofs):
 

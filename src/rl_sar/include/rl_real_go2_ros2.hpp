@@ -1,0 +1,122 @@
+/*
+ * Copyright (c) 2024-2026 Ziqi Fan and contributors
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#ifndef RL_REAL_GO2_ROS2_HPP
+#define RL_REAL_GO2_ROS2_HPP
+
+#include "fsm_go2.hpp"
+#include "fsm_go2_x5.hpp"
+#include "fsm_go2w.hpp"
+#include "inference_runtime.hpp"
+#include "loop.hpp"
+#include "observation_buffer.hpp"
+#include "rl_sdk.hpp"
+
+#include <geometry_msgs/msg/twist.hpp>
+#include <nav_msgs/msg/odometry.hpp>
+#include <rclcpp/rclcpp.hpp>
+#include <unitree_api/msg/request.hpp>
+#include <unitree_api/msg/response.hpp>
+#include <unitree_go/msg/low_cmd.hpp>
+#include <unitree_go/msg/low_state.hpp>
+#include <unitree_go/msg/wireless_controller.hpp>
+
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdint>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#if defined(USE_ROS2) && defined(ROS_DISTRO_FOXY)
+namespace libstatistics_collector::topic_statistics_collector
+{
+template <>
+struct TimeStamp<unitree_api::msg::Response>
+{
+    static std::pair<bool, int64_t> value(const unitree_api::msg::Response &)
+    {
+        return std::make_pair(true, 0);
+    }
+};
+}  // namespace libstatistics_collector::topic_statistics_collector
+#endif
+
+class RLRealGo2Ros2 final : public rclcpp::Node, public RL
+{
+public:
+    RLRealGo2Ros2(int argc, char **argv);
+    ~RLRealGo2Ros2() override;
+
+    bool Start();
+    void Stop();
+    bool HasLoopFailure(std::string *message = nullptr) const;
+
+private:
+    using SteadyTime = std::chrono::steady_clock::time_point;
+
+    struct ExternalObservationState
+    {
+        std::vector<float> lin_vel = std::vector<float>(3, 0.0f);
+        float base_height = 0.0f;
+        std::vector<float> body_pose = std::vector<float>(2, 0.0f);
+        bool have_odometry = false;
+        SteadyTime odometry_stamp;
+    };
+
+    std::vector<float> Forward() override;
+    void GetState(RobotState<float> *state) override;
+    void SetCommand(const RobotCommand<float> *command) override;
+    void RobotControl();
+    void RunModel();
+
+    void LowStateCallback(const unitree_go::msg::LowState::SharedPtr msg);
+    void JoystickCallback(const unitree_go::msg::WirelessController::SharedPtr msg);
+    void CmdvelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
+    void OdometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    void MotionResponseCallback(const unitree_api::msg::Response::SharedPtr msg);
+
+    bool WaitForLowState(std::chrono::seconds timeout);
+    bool DeactivateMotionService();
+    int32_t CallMotionApi(int64_t api_id, std::string *response_data = nullptr);
+    bool CopyExternalObservations(RobotState<float> *state = nullptr);
+    void WarnExternalObservations(const std::string &reason);
+    static void SetLowCmdCrc(unitree_go::msg::LowCmd &msg);
+
+    bool x5_mode_ = false;
+    std::atomic<bool> started_{false};
+
+    std::shared_ptr<LoopFunc> loop_keyboard_;
+    std::shared_ptr<LoopFunc> loop_control_;
+    std::shared_ptr<LoopFunc> loop_rl_;
+
+    rclcpp::Publisher<unitree_go::msg::LowCmd>::SharedPtr lowcmd_publisher_;
+    rclcpp::Subscription<unitree_go::msg::LowState>::SharedPtr lowstate_subscriber_;
+    rclcpp::Subscription<unitree_go::msg::WirelessController>::SharedPtr joystick_subscriber_;
+    rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_;
+    rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
+    rclcpp::Publisher<unitree_api::msg::Request>::SharedPtr motion_request_publisher_;
+    rclcpp::Subscription<unitree_api::msg::Response>::SharedPtr motion_response_subscriber_;
+
+    std::mutex state_mutex_;
+    std::condition_variable lowstate_cv_;
+    unitree_go::msg::LowState low_state_{};
+    unitree_go::msg::WirelessController joystick_{};
+    geometry_msgs::msg::Twist cmd_vel_{};
+    bool have_low_state_ = false;
+
+    std::mutex motion_mutex_;
+    std::condition_variable motion_cv_;
+    int64_t pending_motion_request_id_ = 0;
+    bool motion_response_ready_ = false;
+    unitree_api::msg::Response motion_response_{};
+
+    mutable std::mutex external_obs_mutex_;
+    ExternalObservationState external_obs_;
+    SteadyTime last_external_obs_warning_{};
+};
+
+#endif  // RL_REAL_GO2_ROS2_HPP

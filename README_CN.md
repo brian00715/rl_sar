@@ -327,37 +327,36 @@ Go2:
 source devel/setup.bash
 rosrun rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 
-# ROS2
+# ROS2（纯 ROS 2 transport，网卡由 CYCLONEDDS_URI 配置）
+source /home/unitree/ros_workspaces/unitree_ros2/setup.sh
 source install/setup.bash
-ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
+ros2 run rl_sar rl_real_go2_ros2 [wheel]
 
 # CMake
 ./cmake_build/bin/rl_real_go2 <YOUR_NETWORK_INTERFACE> [wheel]
 ```
 
-Go2 + ARX X5 使用 RoboDuet 策略时，以 `x5` 模式启动（需要 ROS 构建，纯 CMake
-模式没有 observation topic）：
+Go2 + ARX X5 使用 RoboDuet 策略时，使用纯 ROS 2 后端的 `x5` 模式：
 
 ```bash
-# ROS1 Noetic
-rosrun rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
-
-# ROS2
-ros2 run rl_sar rl_real_go2 <YOUR_NETWORK_INTERFACE> x5
+source /home/unitree/ros_workspaces/unitree_ros2/setup.sh
+export ROS_DOMAIN_ID=0
+source install/setup.bash
+ros2 run rl_sar rl_real_go2_ros2 x5
 ```
 
-默认订阅以下原始、未缩放的 observation topic（可在
-`policy/go2_x5/base.yaml` 中修改）：
+`rl_real_go2_ros2` 是独立的纯 ROS 2 后端，通过 `unitree_go` 和 `unitree_api`
+消息直接访问 `/lowcmd`、`/lowstate`、`/wirelesscontroller` 和 motion switcher，
+不加载 Unitree SDK 的 ChannelFactory。机器人与其他 ROS 2 节点可以统一使用 domain 0。
+原 `rl_real_go2 <NETWORK_INTERFACE> [wheel]` 保留为纯 Unitree SDK 后端，不订阅 ROS 话题。
 
-| Topic | 消息类型 | 数据格式 |
-|---|---|---|
-| `/go2_x5/lin_vel` | `std_msgs/Float32MultiArray` | 机体系 `[vx, vy, vz]`，m/s |
-| `/go2_x5/base_height` | `std_msgs/Float32` | 世界系 base z，m |
-| `/go2_x5/body_pose_actual` | `std_msgs/Float32MultiArray` | `[pitch, roll]`，rad；也接受 `[height, pitch, roll]` |
-| `/go2_x5/arm_dof_pos` | `std_msgs/Float32MultiArray` | `x5_joint1..6`，rad |
-| `/go2_x5/arm_dof_vel` | `std_msgs/Float32MultiArray` | `x5_joint1..6`，rad/s |
-
-五路数据必须齐全且持续更新；任一路超过默认 `0.2 s` 未更新时，程序暂停生成新的策略动作。
+实机状态估计默认订阅 `/odometry/filtered`（`nav_msgs/Odometry`，可通过
+`policy/go2_x5/base.yaml` 中的 `odometry_topic` 修改）。
+`twist.twist.linear` 必须是机体系 `[vx, vy, vz]`，
+`pose.pose.position.z` 作为世界系基座高度，`pose.pose.orientation` 提供
+pitch 和 roll。重力方向及角速度继续使用 Go2 IMU。预留的六维 X5
+关节位置和速度 observation 固定补零，程序不会向 X5 发送电机命令。
+odometry 超过默认 `0.2 s` 未更新时，程序暂停生成新的策略动作。
 
 G1(29dofs):
 

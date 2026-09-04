@@ -33,6 +33,25 @@ set(USE_MUJOCO OFF CACHE BOOL "Build with MuJoCo simulator support")
 # stock build needs no libzmq; the OCS2 FSM state is compiled out with it.
 set(USE_OCS2_BRIDGE OFF CACHE BOOL "Build with the OCS2 MPC ZeroMQ bridge")
 
+# The bundled Agibot D1 binary requires glibc 2.34. Keep the rest of rl_sar
+# buildable on Ubuntu 20.04 / JetPack systems that provide an older glibc.
+option(BUILD_AGIBOT_D1 "Build the Agibot D1 real-robot executable" ON)
+if(SYSTEM_TYPE STREQUAL "Linux" AND BUILD_AGIBOT_D1)
+    execute_process(
+        COMMAND getconf GNU_LIBC_VERSION
+        OUTPUT_VARIABLE HOST_GLIBC_VERSION_OUTPUT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    string(REGEX MATCH "[0-9]+\\.[0-9]+" HOST_GLIBC_VERSION "${HOST_GLIBC_VERSION_OUTPUT}")
+    if(HOST_GLIBC_VERSION AND HOST_GLIBC_VERSION VERSION_LESS "2.34")
+        message(WARNING
+            "Disabling rl_real_d1: bundled Agibot D1 SDK requires glibc >= 2.34, "
+            "but the host provides ${HOST_GLIBC_VERSION}")
+        set(BUILD_AGIBOT_D1 OFF)
+    endif()
+endif()
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -84,6 +103,9 @@ if(NOT USE_CMAKE)
         find_package(gazebo_msgs REQUIRED)
         find_package(std_srvs REQUIRED)
         find_package(geometry_msgs REQUIRED)
+        find_package(nav_msgs REQUIRED)
+        find_package(unitree_api REQUIRED)
+        find_package(unitree_go REQUIRED)
         ament_package()
     endif()
     add_compile_options(${GAZEBO_CXX_FLAGS})
@@ -292,8 +314,26 @@ endif()
 
 # unitree_sdk2
 if(SYSTEM_TYPE STREQUAL "Linux")
-set(BUILD_EXAMPLES OFF CACHE BOOL "Disable examples build for unitree_sdk2" FORCE)
-add_subdirectory(library/thirdparty/robot_sdk/unitree/unitree_sdk2)
+    set(UNITREE_SDK2_ROOT
+        ${CMAKE_CURRENT_SOURCE_DIR}/library/thirdparty/robot_sdk/unitree/unitree_sdk2)
+    set(UNITREE_SDK2_INCLUDE_DIRS
+        ${UNITREE_SDK2_ROOT}/include
+        ${UNITREE_SDK2_ROOT}/thirdparty/include
+        ${UNITREE_SDK2_ROOT}/thirdparty/include/ddscxx
+    )
+    add_library(unitree_ddsc SHARED IMPORTED GLOBAL)
+    set_target_properties(unitree_ddsc PROPERTIES
+        IMPORTED_LOCATION ${UNITREE_SDK2_ROOT}/thirdparty/lib/${ARCH_DIR}/libddsc.so)
+    add_library(unitree_ddscxx SHARED IMPORTED GLOBAL)
+    set_target_properties(unitree_ddscxx PROPERTIES
+        IMPORTED_LOCATION ${UNITREE_SDK2_ROOT}/thirdparty/lib/${ARCH_DIR}/libddscxx.so)
+    target_link_libraries(unitree_ddscxx INTERFACE unitree_ddsc Threads::Threads)
+
+    add_library(unitree_sdk2 STATIC IMPORTED GLOBAL)
+    set_target_properties(unitree_sdk2 PROPERTIES
+        IMPORTED_LOCATION ${UNITREE_SDK2_ROOT}/lib/${ARCH_DIR}/libunitree_sdk2.a)
+    target_include_directories(unitree_sdk2 INTERFACE ${UNITREE_SDK2_INCLUDE_DIRS})
+    target_link_libraries(unitree_sdk2 INTERFACE unitree_ddsc unitree_ddscxx Threads::Threads)
 endif()
 
 # l4w4_sdk
@@ -533,24 +573,38 @@ if(SYSTEM_TYPE STREQUAL "Linux")
     set_target_properties(rl_real_go2 PROPERTIES
         INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_CURRENT_SOURCE_DIR}/library/thirdparty/robot_sdk/unitree/unitree_sdk2/thirdparty/lib/${ARCH_DIR}"
     )
-    if(NOT USE_CMAKE)
-        target_compile_definitions(rl_real_go2 PRIVATE USE_ROS)
-        if($ENV{ROS_DISTRO} MATCHES "noetic")
-            target_link_libraries(rl_real_go2 ${catkin_LIBRARIES})
-        elseif($ENV{ROS_DISTRO} MATCHES "foxy|humble")
-            ament_target_dependencies(rl_real_go2
-                rclcpp
-                geometry_msgs
-                std_msgs
-            )
-            install(TARGETS rl_real_go2 DESTINATION lib/${PROJECT_NAME})
-        endif()
+    if(NOT USE_CMAKE AND $ENV{ROS_DISTRO} MATCHES "foxy|humble")
+        install(TARGETS rl_real_go2 DESTINATION lib/${PROJECT_NAME})
     endif()
+endif()
+
+# Pure ROS 2 transport for Go2/Go2W/Go2-X5. This target deliberately does not
+# link unitree_sdk2 or its bundled CycloneDDS; Unitree topics are accessed via
+# the unitree_go and unitree_api ROS interfaces in domain 0.
+if(SYSTEM_TYPE STREQUAL "Linux" AND NOT USE_CMAKE AND $ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    add_executable(rl_real_go2_ros2 src/rl_real_go2_ros2.cpp)
+    target_link_libraries(rl_real_go2_ros2
+        rl_sdk
+        observation_buffer
+        ${YAML_CPP_LIBRARIES}
+    )
+    ament_target_dependencies(rl_real_go2_ros2
+        rclcpp
+        geometry_msgs
+        nav_msgs
+        unitree_api
+        unitree_go
+    )
+    if($ENV{ROS_DISTRO} STREQUAL "foxy")
+        target_compile_definitions(rl_real_go2_ros2 PRIVATE ROS_DISTRO_FOXY)
+    endif()
+    install(TARGETS rl_real_go2_ros2 DESTINATION lib/${PROJECT_NAME})
 endif()
 
 # executable for rl real g1
 if(SYSTEM_TYPE STREQUAL "Linux")
     add_executable(rl_real_g1 src/rl_real_g1.cpp)
+    target_include_directories(rl_real_g1 BEFORE PRIVATE ${UNITREE_SDK2_INCLUDE_DIRS})
     target_link_libraries(rl_real_g1
         unitree_sdk2
         rl_sdk
@@ -597,7 +651,7 @@ if(SYSTEM_TYPE STREQUAL "Linux")
 endif()
 
 # executable for rl real d1
-if(SYSTEM_TYPE STREQUAL "Linux")
+if(SYSTEM_TYPE STREQUAL "Linux" AND BUILD_AGIBOT_D1)
     add_executable(rl_real_d1 src/rl_real_d1.cpp)
     target_link_libraries(rl_real_d1
         ${AGIBOT_D1_LIBS}

@@ -643,37 +643,19 @@ void RL::AttitudeProtect(const std::vector<float> &quaternion, float pitch_thres
 
 static int kbhit()
 {
-    static bool initialized = false;
-    static termios original_term;
+    termios original_term{};
+    if (tcgetattr(STDIN_FILENO, &original_term) != 0) return -1;
 
-    // Initialize terminal to non-canonical mode on first call
-    if (!initialized)
-    {
-        tcgetattr(STDIN_FILENO, &original_term);
-
-        termios new_term = original_term;
-        new_term.c_lflag &= ~(ICANON | ECHO);  // Disable canonical mode and echo
-        new_term.c_cc[VMIN] = 0;   // Non-blocking read
-        new_term.c_cc[VTIME] = 0;  // No timeout
-
-        tcsetattr(STDIN_FILENO, TCSANOW, &new_term);
-
-        // Register cleanup function to restore terminal on exit
-        static bool cleanup_registered = false;
-        if (!cleanup_registered)
-        {
-            std::atexit([]() {
-                tcsetattr(STDIN_FILENO, TCSANOW, &original_term);
-            });
-            cleanup_registered = true;
-        }
-
-        initialized = true;
-    }
+    termios new_term = original_term;
+    new_term.c_lflag &= ~(ICANON | ECHO);  // Disable canonical mode and echo
+    new_term.c_cc[VMIN] = 0;   // Non-blocking read
+    new_term.c_cc[VTIME] = 0;  // No timeout
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &new_term) != 0) return -1;
 
     // Non-blocking read of a single character
     char c;
     int result = read(STDIN_FILENO, &c, 1);
+    tcsetattr(STDIN_FILENO, TCSANOW, &original_term);
 
     return (result == 1) ? (unsigned char)c : -1;
 }
@@ -788,7 +770,7 @@ void RL::ReadYaml(const std::string& file_path, const std::string& file_name)
     for (auto it = config.begin(); it != config.end(); ++it)
     {
         std::string key = it->first.as<std::string>();
-        this->params.config_node[key] = it->second;
+        this->params.Set(key, it->second);
     }
 }
 

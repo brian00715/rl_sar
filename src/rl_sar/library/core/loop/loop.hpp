@@ -16,6 +16,7 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <exception>
 #include "logger.hpp"
 
 #ifdef __linux__
@@ -29,9 +30,15 @@ public:
     LoopFunc(const std::string &name, float period, std::function<void()> func, int bindCPU = -1)
         : _name(name), _period(period), _func(func), _bindCPU(bindCPU), _running(false) {}
 
+    ~LoopFunc()
+    {
+        shutdown();
+    }
+
     void start()
     {
-        _running = true;
+        if (_running.exchange(true)) return;
+        _failed = false;
         std::cout << LOGGER::INFO << "[Loop] Loop start - name: " << _name << ", period: " << formatPeriod() << "ms"
                   << (_bindCPU != -1 ? ", cpu: " + std::to_string(_bindCPU) : ", cpu: unspecified") << std::endl;
         if (_bindCPU != -1)
@@ -43,21 +50,31 @@ public:
         {
             _thread = std::thread(&LoopFunc::loop, this);
         }
-        _thread.detach();
     }
 
     void shutdown()
     {
+        const bool was_running = _running.exchange(false);
         {
             std::unique_lock<std::mutex> lock(_mutex);
-            _running = false;
             _cv.notify_one();
         }
-        if (_thread.joinable())
+        if (_thread.joinable() && _thread.get_id() != std::this_thread::get_id())
         {
             _thread.join();
         }
-        std::cout << LOGGER::INFO << "[Loop] Loop end - name: " << _name << std::endl;
+        if (was_running)
+        {
+            std::cout << LOGGER::INFO << "[Loop] Loop end - name: " << _name << std::endl;
+        }
+    }
+
+    bool failed() const { return _failed.load(); }
+
+    std::string errorMessage() const
+    {
+        std::lock_guard<std::mutex> lock(_errorMutex);
+        return _errorMessage;
     }
 
 private:
@@ -66,9 +83,12 @@ private:
     std::function<void()> _func;
     int _bindCPU;
     std::atomic<bool> _running;
+    std::atomic<bool> _failed{false};
     std::mutex _mutex;
     std::condition_variable _cv;
     std::thread _thread;
+    mutable std::mutex _errorMutex;
+    std::string _errorMessage;
 
     void loop()
     {
@@ -76,7 +96,34 @@ private:
         {
             auto start = std::chrono::steady_clock::now();
 
-            _func();
+            try
+            {
+                _func();
+            }
+            catch (const std::exception &error)
+            {
+                {
+                    std::lock_guard<std::mutex> lock(_errorMutex);
+                    _errorMessage = error.what();
+                }
+                _failed = true;
+                _running = false;
+                std::cerr << LOGGER::ERROR << "[Loop] Unhandled exception - name: " << _name
+                          << ", error: " << error.what() << std::endl;
+                break;
+            }
+            catch (...)
+            {
+                {
+                    std::lock_guard<std::mutex> lock(_errorMutex);
+                    _errorMessage = "unknown exception";
+                }
+                _failed = true;
+                _running = false;
+                std::cerr << LOGGER::ERROR << "[Loop] Unhandled exception - name: " << _name
+                          << ", error: unknown exception" << std::endl;
+                break;
+            }
 
             auto end = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
