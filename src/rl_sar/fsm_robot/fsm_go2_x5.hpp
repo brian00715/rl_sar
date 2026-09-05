@@ -14,10 +14,18 @@
 #include "ocs2_bridge.hpp"
 #endif
 
+#ifdef USE_MUJOCO
+#include <algorithm>
+#include <random>
+#endif
+
 // Unitree Go2 carrying a 6-DoF ARX X5 arm, driven by a RoboDuet stage-1 dog
 // policy. 18 actuated joints: 12 legs (policy order FL, FR, RL, RR) followed by
-// x5_joint1..6. The policy only outputs the 12 leg actions; the arm is held at
-// its default position by a zero entry in action_scale.
+// x5_joint1..6. The policy only outputs the 12 leg actions; the arm is normally
+// held at its default position by a zero entry in action_scale. In MuJoCo-only
+// builds it can instead be driven by a random-walk disturbance (press 'N') that
+// mirrors RoboDuet's WBCEnv._apply_stage1_arm_curriculum_actions, the same
+// generator stage-1 training used to teach the leg policy to reject arm motion.
 namespace go2_x5_fsm
 {
 
@@ -183,6 +191,19 @@ public:
 
     float percent_transition = 0.0f;
 
+#ifdef USE_MUJOCO
+    // Random-walk arm disturbance, mirroring RoboDuet's
+    // _apply_stage1_arm_curriculum_actions (accel -> vel -> pos, clamped to
+    // joint limits with a velocity bounce on contact). MuJoCo-only: never
+    // compiled into the hardware binaries.
+    bool arm_perturb_enabled_ = false;
+    int arm_perturb_step_ = 0;
+    std::vector<float> arm_perturb_offset_;
+    std::vector<float> arm_perturb_vel_;
+    std::vector<float> arm_perturb_accel_;
+    std::mt19937 arm_perturb_rng_{std::random_device{}()};
+#endif
+
     void Enter() override
     {
         percent_transition = 0.0f;
@@ -205,23 +226,128 @@ public:
             rl.rl_init_done = false;
             rl.fsm.RequestStateChange("RLFSMStatePassive");
         }
+
+#ifdef USE_MUJOCO
+        // Re-entering the state (e.g. after GetDown/GetUp) should not carry a
+        // stale offset into the freshly reset arm.
+        arm_perturb_step_ = 0;
+        const int num_arm_dofs = rl.params.Get<int>("num_arm_dofs", 0);
+        arm_perturb_offset_.assign(num_arm_dofs, 0.0f);
+        arm_perturb_vel_.assign(num_arm_dofs, 0.0f);
+        arm_perturb_accel_.assign(num_arm_dofs, 0.0f);
+        if (!arm_perturb_enabled_)
+        {
+            rl.ClearExternalArmTarget();
+        }
+#endif
     }
 
     void Run() override
     {
         if (!rl.rl_init_done) rl.rl_init_done = true;
 
+#ifdef USE_MUJOCO
+        StepArmPerturbation();
+#endif
+
         std::cout << "\r\033[K" << std::flush << LOGGER::INFO << "RL Controller [" << rl.config_name << "]"
                   << " x:" << rl.control.x << " y:" << rl.control.y << " yaw:" << rl.control.yaw
                   << " pitch:" << rl.control.body_pitch << " roll:" << rl.control.body_roll
-                  << " height:" << rl.control.body_height << std::flush;
+                  << " height:" << rl.control.body_height
+#ifdef USE_MUJOCO
+                  << " arm_perturb:" << (arm_perturb_enabled_ ? "ON" : "off")
+#endif
+                  << std::flush;
         RLControl();
     }
 
     void Exit() override
     {
         rl.rl_init_done = false;
+#ifdef USE_MUJOCO
+        rl.ClearExternalArmTarget();
+#endif
     }
+
+#ifdef USE_MUJOCO
+    void StepArmPerturbation()
+    {
+        if (rl.control.current_keyboard == Input::Keyboard::N || rl.control.current_gamepad == Input::Gamepad::LB_Y)
+        {
+            arm_perturb_enabled_ = !arm_perturb_enabled_;
+            if (!arm_perturb_enabled_)
+            {
+                rl.ClearExternalArmTarget();
+            }
+            std::cout << std::endl << LOGGER::NOTE << "[go2_x5] Arm perturbation "
+                      << (arm_perturb_enabled_ ? "enabled" : "disabled") << std::endl;
+        }
+        if (!arm_perturb_enabled_)
+        {
+            return;
+        }
+
+        const int num_arm_dofs = rl.params.Get<int>("num_arm_dofs", 0);
+        const int num_leg_dofs = rl.params.Get<int>("num_leg_dofs", 0);
+        if (num_arm_dofs <= 0 || (int)arm_perturb_offset_.size() != num_arm_dofs)
+        {
+            return;
+        }
+
+        const float dt = rl.params.Get<float>("dt") * rl.params.Get<int>("decimation");
+        const float max_accel = rl.params.Get<float>("arm_perturb_max_accel");
+        const float max_vel = rl.params.Get<float>("arm_perturb_max_vel");
+        const float resample_time = rl.params.Get<float>("arm_perturb_accel_resample_time");
+        const float zero_accel_prob = rl.params.Get<float>("arm_perturb_zero_accel_probability");
+        const float zero_vel_prob = rl.params.Get<float>("arm_perturb_zero_vel_probability");
+        const auto lower = rl.params.Get<std::vector<float>>("arm_perturb_pos_lower");
+        const auto upper = rl.params.Get<std::vector<float>>("arm_perturb_pos_upper");
+        const auto default_dof_pos = rl.params.Get<std::vector<float>>("default_dof_pos");
+
+        std::uniform_real_distribution<float> unit_dist(-1.0f, 1.0f);
+        std::uniform_real_distribution<float> prob_dist(0.0f, 1.0f);
+
+        const int resample_steps = std::max(1, (int)(resample_time / dt));
+        if (arm_perturb_step_ % resample_steps == 0)
+        {
+            for (int i = 0; i < num_arm_dofs; ++i)
+            {
+                arm_perturb_accel_[i] = unit_dist(arm_perturb_rng_) * max_accel;
+            }
+        }
+        ++arm_perturb_step_;
+
+        // One coin flip per tick (not per joint) -- matches training, where the
+        // whole arm either freezes or moves together, never joint-by-joint.
+        const bool zero_accel = prob_dist(arm_perturb_rng_) < zero_accel_prob;
+        const bool zero_vel = prob_dist(arm_perturb_rng_) < zero_vel_prob;
+
+        std::vector<float> target_q(num_arm_dofs), target_dq(num_arm_dofs);
+        for (int i = 0; i < num_arm_dofs; ++i)
+        {
+            const float accel = zero_accel ? 0.0f : arm_perturb_accel_[i];
+            arm_perturb_vel_[i] = std::clamp(arm_perturb_vel_[i] + accel * dt, -max_vel, max_vel);
+            if (zero_vel)
+            {
+                arm_perturb_vel_[i] = 0.0f;
+            }
+            arm_perturb_offset_[i] += arm_perturb_vel_[i] * dt;
+
+            const float arm_default = default_dof_pos[num_leg_dofs + i];
+            float target = arm_default + arm_perturb_offset_[i];
+            if ((target < lower[i] && arm_perturb_vel_[i] < 0.0f) || (target > upper[i] && arm_perturb_vel_[i] > 0.0f))
+            {
+                arm_perturb_vel_[i] *= -1.0f;
+            }
+            target = std::clamp(target, lower[i], upper[i]);
+            arm_perturb_offset_[i] = target - arm_default;
+
+            target_q[i] = target;
+            target_dq[i] = arm_perturb_vel_[i];
+        }
+        rl.SetExternalArmTarget(target_q, target_dq);
+    }
+#endif
 
     std::string CheckChange() override
     {

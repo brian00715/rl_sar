@@ -73,10 +73,10 @@ go2_x5/roboduet_stage1:
   arm_num_commands: 9
   dog_commands_scale: [2, 2, 0.25, 1, 1, 1,
                        1, 0.15, 1, 1, 1]
-  # Gait command slots the operator does not drive, frozen at their trained
-  # midpoints. Empty unless the run used dynamic gait.
-  dog_commands_extra: [3, 0.06, 0.275, 0.35, 0.49]
-  gait_frequency: 3
+  footswing_height: 0.06
+  stance_width: 0.3
+  stance_length: 0.45
+  gait_frequency: 2
   gait_duration: 0.49
   # trotting: [phases, offsets, bounds]
   gait_phases: [0.5, 0.0, 0.0]
@@ -102,3 +102,15 @@ go2_x5/roboduet_stage1:
                     0, 0, 0,
                     0, 0, 0]
   joint_mapping: [3, 4, 5, 0, 1, 2, 9, 10, 11, 6, 7, 8, 12, 13, 14, 15, 16, 17]
+
+  # MuJoCo-only: random-walk arm disturbance (toggle with 'N'), same generator
+  # as RoboDuet's WBCEnv._apply_stage1_arm_curriculum_actions -- exercises the
+  # leg policy against the arm motion it was trained to reject. Position bounds
+  # are x5_joint1..6's physical ranges (go2_x5.xml).
+  arm_perturb_max_accel: 3.0
+  arm_perturb_max_vel: 1.0
+  arm_perturb_accel_resample_time: 0.1
+  arm_perturb_zero_accel_probability: 0.3
+  arm_perturb_zero_vel_probability: 0.005
+  arm_perturb_pos_lower: [-2.094, 0, 0, -1.671, -1.671, -2.094]
+  arm_perturb_pos_upper: [3.14159, 3.665, 3.24, 1.671, 1.671, 2.094]

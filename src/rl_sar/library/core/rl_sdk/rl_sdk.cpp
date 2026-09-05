@@ -213,12 +213,17 @@ std::vector<float> RL::ComputeObservation()
             // followed, when the policy was trained with dynamic gait, by the
             // 5 gait commands [gait_frequency, footswing_height, stance_width,
             // stance_length, gait_duration], held at the constants the export
-            // script recorded in dog_commands_extra.
+            // script recorded. gait_frequency/gait_duration are read from the
+            // same params the clock uses below, so this observation can never
+            // drift out of sync with the actual gait clock.
             std::vector<float> dog_commands = {
                 this->control.x, this->control.y, this->control.yaw,
-                this->control.body_pitch, this->control.body_roll, this->control.body_height};
-            auto dog_commands_extra = this->params.Get<std::vector<float>>("dog_commands_extra");
-            dog_commands.insert(dog_commands.end(), dog_commands_extra.begin(), dog_commands_extra.end());
+                this->control.body_pitch, this->control.body_roll, this->control.body_height,
+                this->params.Get<float>("gait_frequency"),
+                this->params.Get<float>("footswing_height"),
+                this->params.Get<float>("stance_width"),
+                this->params.Get<float>("stance_length"),
+                this->params.Get<float>("gait_duration")};
             obs_list.push_back(dog_commands * this->params.Get<std::vector<float>>("dog_commands_scale"));
         }
         else if (observation == "roboduet/arm_commands")
