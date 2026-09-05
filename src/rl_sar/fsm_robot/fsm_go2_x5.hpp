@@ -212,8 +212,10 @@ public:
         // the phase is deterministic every time the policy is (re-)entered.
         rl.gait_indices = 0.0f;
 
-        // read params from yaml
-        rl.config_name = "roboduet_stage1";
+        // read params from yaml. Which policy directory under policy/go2_x5/
+        // gets loaded is base.yaml's config_name, so switching policies is a
+        // one-line yaml edit rather than a rebuild.
+        rl.config_name = rl.params.Get<std::string>("config_name", "roboduet_stage1");
         std::string robot_config_path = rl.robot_name + "/" + rl.config_name;
         try
         {
@@ -304,6 +306,17 @@ public:
         const auto lower = rl.params.Get<std::vector<float>>("arm_perturb_pos_lower");
         const auto upper = rl.params.Get<std::vector<float>>("arm_perturb_pos_upper");
         const auto default_dof_pos = rl.params.Get<std::vector<float>>("default_dof_pos");
+
+        // The bounds are optional (MuJoCo-only, and only some exports write
+        // them). A config without them would otherwise index past the end of
+        // an empty vector below.
+        if ((int)lower.size() != num_arm_dofs || (int)upper.size() != num_arm_dofs)
+        {
+            std::cout << std::endl << LOGGER::WARNING << "[go2_x5] " << rl.config_name
+                      << " declares no arm_perturb_pos_lower/upper; arm perturbation disabled" << std::endl;
+            arm_perturb_enabled_ = false;
+            return;
+        }
 
         std::uniform_real_distribution<float> unit_dist(-1.0f, 1.0f);
         std::uniform_real_distribution<float> prob_dist(0.0f, 1.0f);
@@ -410,7 +423,7 @@ public:
         next_state_ = state_name_;
         last_link_ = OCS2Bridge::LinkState::WAITING;
 
-        rl.config_name = "roboduet_stage1";
+        rl.config_name = rl.params.Get<std::string>("config_name", "roboduet_stage1");
         try
         {
             rl.InitRL(rl.robot_name + "/" + rl.config_name);

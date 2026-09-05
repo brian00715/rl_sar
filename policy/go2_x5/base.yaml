@@ -3,6 +3,11 @@
 # Source checkpoint: runs/2026-07-23/stage1_v3_204746_seed2793/checkpoints_dog/ac_weights_last_dog.pt
 
 go2_x5:
+  # Policy directory under policy/go2_x5/ that the RL states load (its
+  # config.yaml + policy.pt). Change this line to switch policies -- it is read
+  # at state entry, so no rebuild is needed. Re-exporting keeps whatever is set
+  # here; it only fills in a name when base.yaml has none.
+  config_name: "roboduet_stage1"
   dt: 0.005
   decimation: 4
   num_of_dofs: 18

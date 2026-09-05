@@ -5,6 +5,8 @@
 
 #include "rl_sdk.hpp"
 
+#include <map>
+
 void RL::StateController(const RobotState<float>* state, RobotCommand<float>* command)
 {
     auto updateState = [&](std::shared_ptr<FSMState> statePtr)
@@ -213,18 +215,28 @@ std::vector<float> RL::ComputeObservation()
             // followed, when the policy was trained with dynamic gait, by the
             // 5 gait commands [gait_frequency, footswing_height, stance_width,
             // stance_length, gait_duration], held at the constants the export
-            // script recorded. gait_frequency/gait_duration are read from the
+            // script recorded (InitRL unpacks those out of dog_commands_extra).
+            // dog_commands_scale is exactly as wide as the command vector the
+            // policy trained on, so a run without dynamic gait stops after the
+            // operator's six. gait_frequency/gait_duration are read from the
             // same params the clock uses below, so this observation can never
             // drift out of sync with the actual gait clock.
             std::vector<float> dog_commands = {
                 this->control.x, this->control.y, this->control.yaw,
-                this->control.body_pitch, this->control.body_roll, this->control.body_height,
-                this->params.Get<float>("gait_frequency"),
-                this->params.Get<float>("footswing_height"),
-                this->params.Get<float>("stance_width"),
-                this->params.Get<float>("stance_length"),
-                this->params.Get<float>("gait_duration")};
-            obs_list.push_back(dog_commands * this->params.Get<std::vector<float>>("dog_commands_scale"));
+                this->control.body_pitch, this->control.body_roll, this->control.body_height};
+            const auto& dog_commands_scale = this->params.Get<std::vector<float>>("dog_commands_scale");
+            if (dog_commands_scale.size() > dog_commands.size())
+            {
+                std::vector<float> gait_commands = {
+                    this->params.Get<float>("gait_frequency"),
+                    this->params.Get<float>("footswing_height"),
+                    this->params.Get<float>("stance_width"),
+                    this->params.Get<float>("stance_length"),
+                    this->params.Get<float>("gait_duration")};
+                gait_commands.resize(dog_commands_scale.size() - dog_commands.size(), 0.0f);
+                dog_commands.insert(dog_commands.end(), gait_commands.begin(), gait_commands.end());
+            }
+            obs_list.push_back(dog_commands * dog_commands_scale);
         }
         else if (observation == "roboduet/arm_commands")
         {
@@ -239,8 +251,8 @@ std::vector<float> RL::ComputeObservation()
             const float gait_frequency = this->params.Get<float>("gait_frequency");
             const float gait_duration = this->params.Get<float>("gait_duration");
             const float policy_dt = this->params.Get<float>("dt") * this->params.Get<int>("decimation");
-            auto gait_phases = this->params.Get<std::vector<float>>("gait_phases"); // phases, offsets, bounds
-            const float phases = gait_phases[0], offsets = gait_phases[1], bounds = gait_phases[2];
+            const auto gait_phases = this->params.Get<std::map<std::string, float>>("gait_phases");
+            const float phases = gait_phases.at("phases"), offsets = gait_phases.at("offsets"), bounds = gait_phases.at("bounds");
 
             this->gait_indices = std::fmod(this->gait_indices + policy_dt * gait_frequency, 1.0f);
 
@@ -480,6 +492,25 @@ void RL::InitRL(std::string robot_config_path)
     std::lock_guard<std::mutex> lock(this->model_mutex);
 
     this->ReadYaml(robot_config_path, "config.yaml");
+
+    // Newer exports pack the frozen gait command slots into a single list,
+    // [gait_frequency, footswing_height, stance_width, stance_length,
+    // gait_duration]; unpack it into the named params so the observation, the
+    // gait clock and the joylink gait tuning all read one format regardless of
+    // which exporter wrote the config.
+    const auto& dog_commands_extra = this->params.Get<std::vector<float>>("dog_commands_extra");
+    if (!dog_commands_extra.empty())
+    {
+        static const std::vector<std::string> gait_command_keys = {"gait_frequency", "footswing_height", "stance_width", "stance_length", "gait_duration"};
+        if (dog_commands_extra.size() != gait_command_keys.size())
+        {
+            throw std::runtime_error("dog_commands_extra must hold " + std::to_string(gait_command_keys.size()) + " values, got " + std::to_string(dog_commands_extra.size()));
+        }
+        for (size_t i = 0; i < gait_command_keys.size(); ++i)
+        {
+            this->params.Set(gait_command_keys[i], YAML::Node(dog_commands_extra[i]));
+        }
+    }
 
     // init joint num first
     this->InitJointNum(this->params.Get<int>("num_of_dofs"));
