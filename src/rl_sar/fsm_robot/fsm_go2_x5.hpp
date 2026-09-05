@@ -23,7 +23,7 @@
 // policy. 18 actuated joints: 12 legs (policy order FL, FR, RL, RR) followed by
 // x5_joint1..6. The policy only outputs the 12 leg actions; the arm is normally
 // held at its default position by a zero entry in action_scale. In MuJoCo-only
-// builds it can instead be driven by a random-walk disturbance (press 'N') that
+// builds it can instead be driven by a random-walk disturbance (press 'B') that
 // mirrors RoboDuet's WBCEnv._apply_stage1_arm_curriculum_actions, the same
 // generator stage-1 training used to teach the leg policy to reject arm motion.
 namespace go2_x5_fsm
@@ -272,7 +272,8 @@ public:
 #ifdef USE_MUJOCO
     void StepArmPerturbation()
     {
-        if (rl.control.current_keyboard == Input::Keyboard::N || rl.control.current_gamepad == Input::Gamepad::LB_Y)
+        // 'N' is already the global navigation-mode toggle (rl_sdk.cpp); use 'B'.
+        if (rl.control.current_keyboard == Input::Keyboard::B || rl.control.current_gamepad == Input::Gamepad::LB_Y)
         {
             arm_perturb_enabled_ = !arm_perturb_enabled_;
             if (!arm_perturb_enabled_)

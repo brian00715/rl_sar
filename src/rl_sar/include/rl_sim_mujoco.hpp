@@ -30,6 +30,11 @@
 #include "joystick.hh"
 #include "mujoco_utils.hpp"
 
+#ifdef USE_JOYLINK
+#include "joylink_client/joylink_client.h"
+#include <map>
+#endif
+
 #include "matplotlibcpp.h"
 namespace plt = matplotlibcpp;
 
@@ -92,10 +97,31 @@ private:
     Button sys_js_button[20];
     int sys_js_axis[10] = {0};
     bool sys_js_active = false;
+    bool sys_js_pose_active = false;
     float axis_deadzone = 0.05f;
     int sys_js_max_value = (1 << (16 - 1));
     void SetupSysJoystick(const std::string& device, int bits);
     void GetSysJoystick();
+
+#ifdef USE_JOYLINK
+    // Alternate gamepad input: reads a running `joylink` server over ZMQ
+    // instead of /dev/input/js0 directly, so per-pad axis/button quirks are
+    // fixed once in a YAML config rather than guessed in code. When enabled,
+    // this replaces GetSysJoystick() as the joystick loop's target and follows
+    // RoboDuet's own play_by_joy.py command layout (same axis roles, same
+    // stance/gait step sizes), since that is the layout this policy was
+    // designed to be driven with.
+    std::unique_ptr<joylink_client::JoylinkClient> joylink;
+    std::map<std::string, int> joylink_prev_buttons;
+    float joylink_prev_dpad_x = 0.0f;
+    float joylink_prev_dpad_y = 0.0f;
+    bool joylink_defaults_captured = false;
+    float joylink_default_gait_frequency = 0.0f;
+    float joylink_default_stance_width = 0.0f;
+    float joylink_default_stance_length = 0.0f;
+    void SetupJoyLink(const std::string& config_path);
+    void GetJoyLinkInput();
+#endif
 
     // others
     std::string gazebo_model_name;

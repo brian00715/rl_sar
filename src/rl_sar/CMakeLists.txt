@@ -33,6 +33,14 @@ set(USE_MUJOCO OFF CACHE BOOL "Build with MuJoCo simulator support")
 # stock build needs no libzmq; the OCS2 FSM state is compiled out with it.
 set(USE_OCS2_BRIDGE OFF CACHE BOOL "Build with the OCS2 MPC ZeroMQ bridge")
 
+# JoyLink gamepad client (https://github.com/ -- local checkout at JOYLINK_ROOT).
+# MuJoCo-sim-only alternate to raw /dev/input/js0 reading: a `joylink` server
+# (built separately from JOYLINK_ROOT) normalizes a specific pad's axes/buttons
+# once via YAML instead of guessing indices/polarity in C++. Off by default so
+# the stock build needs neither libzmq nor a JoyLink checkout.
+set(USE_JOYLINK OFF CACHE BOOL "Build rl_sim_mujoco with JoyLink gamepad client support")
+set(JOYLINK_ROOT "" CACHE PATH "Path to a built JoyLink checkout (must already contain build/client, build/common, build/_deps/yaml-cpp-build)")
+
 # The bundled Agibot D1 binary requires glibc 2.34. Keep the rest of rl_sar
 # buildable on Ubuntu 20.04 / JetPack systems that provide an older glibc.
 option(BUILD_AGIBOT_D1 "Build the Agibot D1 real-robot executable" ON)
@@ -573,7 +581,7 @@ if(SYSTEM_TYPE STREQUAL "Linux")
     set_target_properties(rl_real_go2 PROPERTIES
         INSTALL_RPATH "${CMAKE_INSTALL_RPATH};${CMAKE_CURRENT_SOURCE_DIR}/library/thirdparty/robot_sdk/unitree/unitree_sdk2/thirdparty/lib/${ARCH_DIR}"
     )
-    if(NOT USE_CMAKE AND $ENV{ROS_DISTRO} MATCHES "foxy|humble")
+    if(NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
         install(TARGETS rl_real_go2 DESTINATION lib/${PROJECT_NAME})
     endif()
 endif()
@@ -581,7 +589,7 @@ endif()
 # Pure ROS 2 transport for Go2/Go2W/Go2-X5. This target deliberately does not
 # link unitree_sdk2 or its bundled CycloneDDS; Unitree topics are accessed via
 # the unitree_go and unitree_api ROS interfaces in domain 0.
-if(SYSTEM_TYPE STREQUAL "Linux" AND NOT USE_CMAKE AND $ENV{ROS_DISTRO} MATCHES "foxy|humble")
+if(SYSTEM_TYPE STREQUAL "Linux" AND NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES "foxy|humble")
     add_executable(rl_real_go2_ros2 src/rl_real_go2_ros2.cpp)
     target_link_libraries(rl_real_go2_ros2
         rl_sdk
@@ -798,6 +806,36 @@ if(USE_MUJOCO)
 
     if(USE_OCS2_BRIDGE)
         target_link_libraries(rl_sim_mujoco ocs2_bridge)
+    endif()
+
+    if(USE_JOYLINK)
+        if(NOT JOYLINK_ROOT)
+            message(FATAL_ERROR "USE_JOYLINK=ON requires -DJOYLINK_ROOT=/path/to/JoyLink (a checkout already built with -DBUILD_ZMQ=ON)")
+        endif()
+        set(JOYLINK_CLIENT_LIB "${JOYLINK_ROOT}/build/client/libjoylink_client.a")
+        set(JOYLINK_COMMON_LIB "${JOYLINK_ROOT}/build/common/libjoystick_common.a")
+        set(JOYLINK_YAML_CPP_LIB "${JOYLINK_ROOT}/build/_deps/yaml-cpp-build/libyaml-cpp.a")
+        foreach(joylink_lib ${JOYLINK_CLIENT_LIB} ${JOYLINK_COMMON_LIB} ${JOYLINK_YAML_CPP_LIB})
+            if(NOT EXISTS "${joylink_lib}")
+                message(FATAL_ERROR "JoyLink artifact not found: ${joylink_lib} -- build JoyLink first (cmake -S . -B build -DBUILD_ZMQ=ON && cmake --build build)")
+            endif()
+        endforeach()
+
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(ZMQ REQUIRED libzmq)
+
+        target_compile_definitions(rl_sim_mujoco PRIVATE USE_JOYLINK)
+        target_include_directories(rl_sim_mujoco PRIVATE
+            ${JOYLINK_ROOT}/client/include
+            ${JOYLINK_ROOT}/include
+            ${ZMQ_INCLUDE_DIRS}
+        )
+        target_link_libraries(rl_sim_mujoco
+            ${JOYLINK_CLIENT_LIB} ${JOYLINK_COMMON_LIB} ${JOYLINK_YAML_CPP_LIB}
+            ${ZMQ_LIBRARIES}
+        )
+        target_link_directories(rl_sim_mujoco PRIVATE ${ZMQ_LIBRARY_DIRS})
+        message(STATUS "JoyLink gamepad support enabled: ${JOYLINK_ROOT}")
     endif()
 
     # macOS specific frameworks and libraries

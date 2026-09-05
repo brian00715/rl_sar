@@ -79,7 +79,16 @@ RL_Sim::RL_Sim(int argc, char **argv)
 
     this->mj_model = m;
     this->mj_data = d;
+#ifdef USE_JOYLINK
+    {
+        std::string joylink_config = (argc >= 4)
+            ? std::string(argv[3])
+            : std::string(CMAKE_CURRENT_SOURCE_DIR) + "/config/joylink_go2_x5.yaml";
+        this->SetupJoyLink(joylink_config);
+    }
+#else
     this->SetupSysJoystick("/dev/input/js0", 16); // 16 bits joystick
+#endif
 
     // read params from yaml
     this->ReadYaml(this->robot_name, "base.yaml");
@@ -114,7 +123,11 @@ RL_Sim::RL_Sim(int argc, char **argv)
     this->loop_keyboard->start();
 
     // joystick
+#ifdef USE_JOYLINK
+    this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Sim::GetJoyLinkInput, this));
+#else
     this->loop_joystick = std::make_shared<LoopFunc>("loop_joystick", 0.01, std::bind(&RL_Sim::GetSysJoystick, this));
+#endif
     this->loop_joystick->start();
 
 #ifdef PLOT
@@ -344,7 +357,184 @@ void RL_Sim::GetSysJoystick()
         this->control.yaw = 0.0f;
         this->sys_js_active = false;
     }
+
+    // Body pose commands (only observed by policies that ask for them, e.g.
+    // RoboDuet's roboduet/dog_commands -- harmless no-op otherwise). Right
+    // stick Y sets pitch and the triggers set roll, both proportional and
+    // snapping to 0 on release like x/y/yaw above; D-pad up/down ramps height
+    // at the same rate as the keyboard's U/J. Axes 2/4/5 (LT/RY/RT) are free
+    // -- axis/dpad indices here follow the same js0 layout already used above
+    // for LX/LY/RX/DPad. Standard joydev trigger axes rest at -max (released)
+    // and read +max at full pull; flip the sign below if a given pad differs.
+    float ry = -float(this->sys_js_axis[4]) / float(this->sys_js_max_value);
+    float lt = std::clamp((float(this->sys_js_axis[2]) / float(this->sys_js_max_value) + 1.0f) * 0.5f, 0.0f, 1.0f);
+    float rt = std::clamp((float(this->sys_js_axis[5]) / float(this->sys_js_max_value) + 1.0f) * 0.5f, 0.0f, 1.0f);
+
+    bool has_pose_input = (ry != 0.0f || lt > 0.01f || rt > 0.01f);
+
+    if (has_pose_input)
+    {
+        this->control.body_pitch = ry;
+        this->control.body_roll = 0.4f * (rt - lt);
+        this->sys_js_pose_active = true;
+    }
+    else if (this->sys_js_pose_active)
+    {
+        this->control.body_pitch = 0.0f;
+        this->control.body_roll = 0.0f;
+        this->sys_js_pose_active = false;
+    }
+
+    if (this->sys_js_axis[7] < 0) this->control.body_height += 0.004f;
+    if (this->sys_js_axis[7] > 0) this->control.body_height -= 0.004f;
 }
+
+#ifdef USE_JOYLINK
+void RL_Sim::SetupJoyLink(const std::string& config_path)
+{
+    try
+    {
+        this->joylink = std::make_unique<joylink_client::JoylinkClient>(config_path);
+        if (!this->joylink->connect())
+        {
+            std::cout << LOGGER::ERROR << "[JoyLink] Failed to connect -- is `joylink " << config_path << "` running?" << std::endl;
+        }
+    }
+    catch (const std::exception& e)
+    {
+        std::cout << LOGGER::ERROR << "[JoyLink] " << e.what() << std::endl;
+        this->joylink.reset();
+    }
+}
+
+void RL_Sim::GetJoyLinkInput()
+{
+    if (!this->joylink)
+    {
+        return;
+    }
+
+    // Config (and therefore gait_frequency/stance_width/stance_length) is
+    // only loaded once RLFSMStateRLLocomotion::Enter() has run; snapshot the
+    // pristine, config.yaml-declared values the first tick after that so the
+    // "back" reset below has something to restore to.
+    if (!this->joylink_defaults_captured && this->rl_init_done)
+    {
+        this->joylink_defaults_captured = true;
+        this->joylink_default_gait_frequency = this->params.Get<float>("gait_frequency");
+        this->joylink_default_stance_width = this->params.Get<float>("stance_width");
+        this->joylink_default_stance_length = this->params.Get<float>("stance_length");
+    }
+
+    // receive()/receiveRaw() drop backlog and return only the newest sample
+    // (fixed upstream in JoyLink -- it used to pop its queue oldest-first
+    // with no skip-ahead, so a stalled consumer, e.g. this process's own
+    // MuJoCo/torch load hiccuping the 10ms joystick loop, would fall
+    // permanently behind, one stale frame per call).
+    joystick_common::MappedJoystickData data;
+    if (!this->joylink->receive(data, 0))
+    {
+        return;
+    }
+
+    auto axis = [&](const std::string& name) -> float
+    {
+        auto it = data.axes.find(name);
+        return it != data.axes.end() ? it->second : 0.0f;
+    };
+    auto button_rising = [&](const std::string& name) -> bool
+    {
+        auto it = data.buttons.find(name);
+        int value = (it != data.buttons.end()) ? it->second : 0;
+        int prev = this->joylink_prev_buttons.count(name) ? this->joylink_prev_buttons[name] : 0;
+        this->joylink_prev_buttons[name] = value;
+        return value != 0 && prev == 0;
+    };
+
+    // Absolute velocity/pose axes, same roles and scale factors as RoboDuet's
+    // play_by_joy.py JOYSTICK_COMMAND_MAP (right_stick_y->yaw, right_stick_x
+    // ->pitch, triggers->roll -- deliberately not the raw-joydev path's own
+    // right_stick_x->yaw convention, see GetSysJoystick above). Final clamping
+    // to the active policy's own limit_vel_x/y/yaw / limit_body_pitch/roll
+    // happens generically in RL::StateController(), so only RoboDuet's scale
+    // factors are applied here.
+    this->control.x = axis("left_stick_x") * 1.5f;
+    this->control.y = axis("left_stick_y");
+    this->control.yaw = axis("right_stick_y") * 1.5f;
+    this->control.body_pitch = axis("right_stick_x") * -1.0f;
+    this->control.body_roll = axis("right_trigger") * -0.3f + axis("left_trigger") * 0.3f;
+
+    // D-pad: step-once on threshold crossing. RoboDuet names these
+    // "dpad_x"->body_height_delta and "dpad_y"->gait_freq; both are just the
+    // hat's two physical axes, kept here under JoyLink's own axis names.
+    const float dpad_x = axis("dpad_x");
+    const float dpad_y = axis("dpad_y");
+    const float kDpadThreshold = 0.5f;
+    if (dpad_x > kDpadThreshold && this->joylink_prev_dpad_x <= kDpadThreshold)
+    {
+        this->control.body_height = clamp(this->control.body_height + 0.05f, -0.3f, 0.3f);
+    }
+    else if (dpad_x < -kDpadThreshold && this->joylink_prev_dpad_x >= -kDpadThreshold)
+    {
+        this->control.body_height = clamp(this->control.body_height - 0.05f, -0.3f, 0.3f);
+    }
+    if (dpad_y > kDpadThreshold && this->joylink_prev_dpad_y <= kDpadThreshold)
+    {
+        this->params.Set("gait_frequency", YAML::Node(clamp(this->params.Get<float>("gait_frequency") - 0.5f, 1.0f, 8.0f)));
+    }
+    else if (dpad_y < -kDpadThreshold && this->joylink_prev_dpad_y >= -kDpadThreshold)
+    {
+        this->params.Set("gait_frequency", YAML::Node(clamp(this->params.Get<float>("gait_frequency") + 0.5f, 1.0f, 8.0f)));
+    }
+    this->joylink_prev_dpad_x = dpad_x;
+    this->joylink_prev_dpad_y = dpad_y;
+
+    // A/B step stance_length, X/Y step stance_width. Both are read straight
+    // out of rl.params by rl_sdk.cpp's roboduet/dog_commands term, so a Set()
+    // here is immediately what the policy is told next tick -- no separate
+    // state to keep in sync, unlike RoboDuet's own fixed-gait play script
+    // (whose warning about commands_dog vs. the actual clock doesn't apply
+    // here for the same reason gait_frequency doesn't need it either).
+    if (button_rising("a"))
+    {
+        this->params.Set("stance_length", YAML::Node(clamp(this->params.Get<float>("stance_length") - 0.05f, 0.2f, 0.5f)));
+    }
+    if (button_rising("b"))
+    {
+        this->params.Set("stance_length", YAML::Node(clamp(this->params.Get<float>("stance_length") + 0.05f, 0.2f, 0.5f)));
+    }
+    if (button_rising("x"))
+    {
+        this->params.Set("stance_width", YAML::Node(clamp(this->params.Get<float>("stance_width") - 0.05f, 0.25f, 0.45f)));
+    }
+    if (button_rising("y"))
+    {
+        this->params.Set("stance_width", YAML::Node(clamp(this->params.Get<float>("stance_width") + 0.05f, 0.25f, 0.45f)));
+    }
+
+    // "back" stands in for play_by_joy.py's f2/reset: that button resets the
+    // whole IsaacGym env (physics + commands), which has no equivalent here
+    // -- the FSM's own GetDown/GetUp already does the physical reset. This
+    // just zeroes velocity/pose and restores the gait shape to what
+    // config.yaml declared.
+    if (button_rising("back"))
+    {
+        this->control.x = 0.0f;
+        this->control.y = 0.0f;
+        this->control.yaw = 0.0f;
+        this->control.body_pitch = 0.0f;
+        this->control.body_roll = 0.0f;
+        this->control.body_height = 0.0f;
+        if (this->joylink_defaults_captured)
+        {
+            this->params.Set("gait_frequency", YAML::Node(this->joylink_default_gait_frequency));
+            this->params.Set("stance_width", YAML::Node(this->joylink_default_stance_width));
+            this->params.Set("stance_length", YAML::Node(this->joylink_default_stance_length));
+        }
+        std::cout << std::endl << LOGGER::NOTE << "[JoyLink] Reset commands and gait shape to config defaults" << std::endl;
+    }
+}
+#endif
 
 void RL_Sim::RunModel()
 {

@@ -1,0 +1,62 @@
+# JoyLink gamepad config for the go2_x5 MuJoCo sim (USE_JOYLINK build only).
+#
+# This is a CLIENT config: rl_sim_mujoco connects to an already-running
+# `joylink` server over ZMQ instead of reading /dev/input/js0 itself, so a
+# pad's per-model axis/button quirks are fixed once here instead of guessed
+# in C++. Start the server separately, pointed at this same file:
+#   <JoyLink checkout>/build/server/joylink config/joylink_go2_x5.yaml
+#
+# Indices below are copied from RoboDuet's own JoyLink/config/loco_ctrl.yaml
+# (the actual pad wired up on this machine), just translated onto this
+# parser's fixed field names -- it doesn't recognize loco_ctrl.yaml's custom
+# "lt"/"rt"/"f1"/"f2" keys, only left_trigger/right_trigger/etc, so those
+# become the schema names below with the same physical indices.
+# f2 (RoboDuet's reset button, physical index 11) has no fixed-name slot of
+# its own; it's aliased onto "back" here since loco_ctrl.yaml leaves back
+# disabled (-1) anyway. f1 (index 10) has no use in play_by_joy.py's own
+# command map either, so it stays unmapped.
+# If you're on a different pad: run `jstest /dev/input/js0` (or set
+# debug_raw: true and watch the server's stdout) to find its real indices.
+joylink:
+  device: "/dev/input/js0"
+  device_name: ""
+
+  deadzone: 0.05
+  sticky_buttons: false
+  publish_rate: 100.0
+  coalesce_interval: 0.001
+  frame_id: "joy"
+  debug_raw: false
+
+  publisher_type: "zmq"
+  zmq:
+    address: "tcp://*:5555"
+
+  button_mapping:
+    a: 0
+    b: 1
+    x: 3
+    y: 4
+    lb: 6
+    rb: 7
+    back: 11   # loco_ctrl.yaml's "f2" (reset)
+    start: -1
+    left_stick: 13
+    right_stick: 14
+    guide: -1
+    touchpad: -1
+
+  axes_mapping:
+    left_stick_x: 1
+    left_stick_y: 0
+    left_trigger: 5    # loco_ctrl.yaml's "lt"
+    right_stick_x: 3
+    right_stick_y: 2
+    right_trigger: 4   # loco_ctrl.yaml's "rt"
+    dpad_x: 7
+    dpad_y: 6
+
+  # Copied verbatim from loco_ctrl.yaml. RL_Sim::GetJoyLinkInput's scale
+  # factors (see play_by_joy.py's JOYSTICK_COMMAND_MAP) are tuned assuming
+  # these channels are already reversed exactly like this.
+  axis_reverse: [0, 1, 2, 3, 6, 7]
