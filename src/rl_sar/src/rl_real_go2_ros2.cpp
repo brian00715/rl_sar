@@ -166,6 +166,9 @@ RLRealGo2Ros2::RLRealGo2Ros2(int argc, char **argv)
         [this](const geometry_msgs::msg::Twist::SharedPtr msg) { CmdvelCallback(msg); });
     if (x5_mode_)
     {
+        arm_state_subscriber_ = create_subscription<sensor_msgs::msg::JointState>(
+            "/arx5_controller/joint_states", rclcpp::SensorDataQoS(),
+            [this](const sensor_msgs::msg::JointState::SharedPtr msg) { ArmJointStateCallback(msg); });
         odometry_subscriber_ = create_subscription<nav_msgs::msg::Odometry>(
             params.Get<std::string>("odometry_topic"), rclcpp::SensorDataQoS(),
             [this](const nav_msgs::msg::Odometry::SharedPtr msg) { OdometryCallback(msg); });
@@ -284,6 +287,29 @@ void RLRealGo2Ros2::GetState(RobotState<float> *state)
     control.y = -joystick.lx;
     control.yaw = -joystick.rx;
 
+    // Body pose/gait commands, consumed only by policies that observe them
+    // (e.g. RoboDuet's roboduet/dog_commands on go2_x5); harmless no-op
+    // otherwise. Right stick up/down commands pitch directly, mirroring the
+    // raw-joydev mapping in rl_sim_mujoco.cpp's GetSysJoystick(). D-pad
+    // up/down steps body_height and left/right steps gait_frequency, both
+    // once per press (rising edge) rather than ramping while held.
+    control.body_pitch = joystick.ry;
+
+    if (keys.components.up && !prev_dpad_up_) control.body_height += 0.2f;
+    if (keys.components.down && !prev_dpad_down_) control.body_height -= 0.2f;
+    if (keys.components.left && !prev_dpad_left_)
+    {
+        params.Set("gait_frequency", YAML::Node(clamp(params.Get<float>("gait_frequency") - 0.5f, 1.0f, 8.0f)));
+    }
+    if (keys.components.right && !prev_dpad_right_)
+    {
+        params.Set("gait_frequency", YAML::Node(clamp(params.Get<float>("gait_frequency") + 0.5f, 1.0f, 8.0f)));
+    }
+    prev_dpad_up_ = keys.components.up;
+    prev_dpad_down_ = keys.components.down;
+    prev_dpad_left_ = keys.components.left;
+    prev_dpad_right_ = keys.components.right;
+
     for (int i = 0; i < 4; ++i) state->imu.quaternion[i] = low_state.imu_state.quaternion[i];
     for (int i = 0; i < 3; ++i) state->imu.gyroscope[i] = low_state.imu_state.gyroscope[i];
 
@@ -339,9 +365,7 @@ void RLRealGo2Ros2::RobotControl()
 void RLRealGo2Ros2::RunModel()
 {
     if (!rl_init_done) return;
-    if (x5_mode_ && !CopyExternalObservations()) return;
 
-    episode_length_buf += 1;
     obs.ang_vel = robot_state.imu.gyroscope;
     obs.commands = {control.x, control.y, control.yaw};
     if (control.navigation_mode)
@@ -354,6 +378,10 @@ void RLRealGo2Ros2::RunModel()
     obs.base_quat = robot_state.imu.quaternion;
     obs.dof_pos = robot_state.motor_state.q;
     obs.dof_vel = robot_state.motor_state.dq;
+    // Copy the validated arm snapshot after the robot state so it cannot be
+    // overwritten by an older sample from the control loop.
+    if (x5_mode_ && !CopyExternalObservations()) return;
+    episode_length_buf += 1;
     obs.actions = Forward();
 
     if (x5_mode_)
@@ -456,6 +484,45 @@ void RLRealGo2Ros2::OdometryCallback(const nav_msgs::msg::Odometry::SharedPtr ms
     external_obs_.odometry_stamp = std::chrono::steady_clock::now();
 }
 
+void RLRealGo2Ros2::ArmJointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg)
+{
+    const int arm_dofs = params.Get<int>("num_arm_dofs");
+    if (msg->position.size() != msg->name.size() ||
+        msg->velocity.size() != msg->name.size() ||
+        (!msg->effort.empty() && msg->effort.size() != msg->name.size()))
+    {
+        WarnExternalObservations("arm JointState has inconsistent position/velocity/effort sizes");
+        return;
+    }
+    std::vector<float> position(arm_dofs), velocity(arm_dofs), effort(arm_dofs, 0.0F);
+    for (int i = 0; i < arm_dofs; ++i)
+    {
+        // ARX5 publishes joint1..joint6; policy arm slots use the same order.
+        const std::string name = "joint" + std::to_string(i + 1);
+        const auto it = std::find(msg->name.begin(), msg->name.end(), name);
+        if (it == msg->name.end() || std::count(msg->name.begin(), msg->name.end(), name) != 1)
+        {
+            WarnExternalObservations("arm JointState is missing or duplicates " + name);
+            return;
+        }
+        const auto index = std::distance(msg->name.begin(), it);
+        position[i] = static_cast<float>(msg->position[index]);
+        velocity[i] = static_cast<float>(msg->velocity[index]);
+        if (!msg->effort.empty()) effort[i] = static_cast<float>(msg->effort[index]);
+    }
+    if (!AllFinite(position) || !AllFinite(velocity) || !AllFinite(effort))
+    {
+        WarnExternalObservations("arm JointState contains non-finite values");
+        return;
+    }
+    std::lock_guard<std::mutex> lock(external_obs_mutex_);
+    external_obs_.arm_pos = std::move(position);
+    external_obs_.arm_vel = std::move(velocity);
+    external_obs_.arm_effort = std::move(effort);
+    external_obs_.have_arm_state = true;
+    external_obs_.arm_state_stamp = std::chrono::steady_clock::now();
+}
+
 void RLRealGo2Ros2::MotionResponseCallback(const unitree_api::msg::Response::SharedPtr msg)
 {
     {
@@ -546,11 +613,11 @@ bool RLRealGo2Ros2::CopyExternalObservations(RobotState<float> *state)
     std::unique_lock<std::mutex> lock(external_obs_mutex_);
     if (state)
     {
+        if (!external_obs_.have_arm_state) return false;
         const int begin = params.Get<int>("num_leg_dofs");
-        const int end = begin + params.Get<int>("num_arm_dofs");
-        std::fill(state->motor_state.q.begin() + begin, state->motor_state.q.begin() + end, 0.0F);
-        std::fill(state->motor_state.dq.begin() + begin, state->motor_state.dq.begin() + end, 0.0F);
-        std::fill(state->motor_state.tau_est.begin() + begin, state->motor_state.tau_est.begin() + end, 0.0F);
+        std::copy(external_obs_.arm_pos.begin(), external_obs_.arm_pos.end(), state->motor_state.q.begin() + begin);
+        std::copy(external_obs_.arm_vel.begin(), external_obs_.arm_vel.end(), state->motor_state.dq.begin() + begin);
+        std::copy(external_obs_.arm_effort.begin(), external_obs_.arm_effort.end(), state->motor_state.tau_est.begin() + begin);
         return true;
     }
     if (!external_obs_.have_odometry)
@@ -566,6 +633,22 @@ bool RLRealGo2Ros2::CopyExternalObservations(RobotState<float> *state)
         WarnExternalObservations("odometry exceeded external_obs_timeout");
         return false;
     }
+    if (!external_obs_.have_arm_state)
+    {
+        lock.unlock();
+        WarnExternalObservations("waiting for /arx5_controller/joint_states");
+        return false;
+    }
+    const float arm_age = std::chrono::duration<float>(now - external_obs_.arm_state_stamp).count();
+    if (arm_age > params.Get<float>("external_obs_timeout", 0.2F))
+    {
+        lock.unlock();
+        WarnExternalObservations("arm JointState exceeded external_obs_timeout");
+        return false;
+    }
+    const int arm_begin = params.Get<int>("num_leg_dofs");
+    std::copy(external_obs_.arm_pos.begin(), external_obs_.arm_pos.end(), obs.dof_pos.begin() + arm_begin);
+    std::copy(external_obs_.arm_vel.begin(), external_obs_.arm_vel.end(), obs.dof_vel.begin() + arm_begin);
     obs.lin_vel = external_obs_.lin_vel;
     obs.base_height = {external_obs_.base_height};
     obs.body_pose_actual = {

@@ -17,6 +17,7 @@
 #include <geometry_msgs/msg/twist.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/joint_state.hpp>
 #include <unitree_api/msg/request.hpp>
 #include <unitree_api/msg/response.hpp>
 #include <unitree_go/msg/low_cmd.hpp>
@@ -65,6 +66,11 @@ private:
         std::vector<float> body_pose = std::vector<float>(2, 0.0f);
         bool have_odometry = false;
         SteadyTime odometry_stamp;
+        std::vector<float> arm_pos;
+        std::vector<float> arm_vel;
+        std::vector<float> arm_effort;
+        bool have_arm_state = false;
+        SteadyTime arm_state_stamp;
     };
 
     std::vector<float> Forward() override;
@@ -77,6 +83,7 @@ private:
     void JoystickCallback(const unitree_go::msg::WirelessController::SharedPtr msg);
     void CmdvelCallback(const geometry_msgs::msg::Twist::SharedPtr msg);
     void OdometryCallback(const nav_msgs::msg::Odometry::SharedPtr msg);
+    void ArmJointStateCallback(const sensor_msgs::msg::JointState::SharedPtr msg);
     void MotionResponseCallback(const unitree_api::msg::Response::SharedPtr msg);
 
     bool WaitForLowState(std::chrono::seconds timeout);
@@ -98,6 +105,7 @@ private:
     rclcpp::Subscription<unitree_go::msg::WirelessController>::SharedPtr joystick_subscriber_;
     rclcpp::Subscription<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_subscriber_;
     rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odometry_subscriber_;
+    rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr arm_state_subscriber_;
     rclcpp::Publisher<unitree_api::msg::Request>::SharedPtr motion_request_publisher_;
     rclcpp::Subscription<unitree_api::msg::Response>::SharedPtr motion_response_subscriber_;
 
@@ -107,6 +115,13 @@ private:
     unitree_go::msg::WirelessController joystick_{};
     geometry_msgs::msg::Twist cmd_vel_{};
     bool have_low_state_ = false;
+
+    // D-pad rising-edge state for the step-once-per-press body_height/
+    // gait_frequency commands (see GetState()).
+    bool prev_dpad_up_ = false;
+    bool prev_dpad_down_ = false;
+    bool prev_dpad_left_ = false;
+    bool prev_dpad_right_ = false;
 
     std::mutex motion_mutex_;
     std::condition_variable motion_cv_;

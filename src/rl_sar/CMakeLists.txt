@@ -112,6 +112,7 @@ if(NOT USE_CMAKE)
         find_package(std_srvs REQUIRED)
         find_package(geometry_msgs REQUIRED)
         find_package(nav_msgs REQUIRED)
+        find_package(sensor_msgs REQUIRED)
         find_package(unitree_api REQUIRED)
         find_package(unitree_go REQUIRED)
         ament_package()
@@ -600,6 +601,7 @@ if(SYSTEM_TYPE STREQUAL "Linux" AND NOT USE_CMAKE AND "$ENV{ROS_DISTRO}" MATCHES
         rclcpp
         geometry_msgs
         nav_msgs
+        sensor_msgs
         unitree_api
         unitree_go
     )

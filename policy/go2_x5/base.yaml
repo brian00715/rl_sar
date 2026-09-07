@@ -56,6 +56,6 @@ go2_x5:
   use_base_state_sensor: true
   # Real-robot state estimate. Odometry twist.linear must be expressed in the
   # robot body frame; pose.position.z is the world-frame base height. The X5
-  # joint observation slots are zero-filled for this stage-1 leg-only policy.
+  # joint observations come from /arx5_controller/joint_states (joint1..joint6).
   external_obs_timeout: 0.2
   odometry_topic: "/odometry/filtered"
