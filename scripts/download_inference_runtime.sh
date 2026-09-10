@@ -71,6 +71,7 @@ is_libtorch_valid() {
 # Function: Download LibTorch
 download_libtorch() {
     # Check if Jetson platform
+    IS_JETSON=true
     if [ "${IS_JETSON}" = true ]; then
         print_info "Jetson platform detected - using install_pytorch_jetson.sh"
         if [ -x "${SCRIPT_DIR}/install_pytorch_jetson.sh" ]; then

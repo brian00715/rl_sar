@@ -29,16 +29,16 @@ mkdir -p "${TEMP_DIR}"
 
 # Function: Detect if running on Jetson
 is_jetson_platform() {
-    if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "aarch64" ]; then
-        return 1
-    fi
+    # if [ "$(uname -s)" != "Linux" ] || [ "$(uname -m)" != "aarch64" ]; then
+    #     return 1
+    # fi
 
-    # Check for Jetson-specific indicators
-    if [ -f /etc/nv_tegra_release ] || [ -d /usr/local/cuda-*/targets/aarch64-linux ]; then
-        return 0
-    fi
+    # # Check for Jetson-specific indicators
+    # if [ -f /etc/nv_tegra_release ] || [ -d /usr/local/cuda-*/targets/aarch64-linux ]; then
+    #     return 0
+    # fi
 
-    return 1
+    return 0
 }
 
 # Function: Detect JetPack version
