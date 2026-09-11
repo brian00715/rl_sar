@@ -104,6 +104,10 @@ go2_x5/stage1_robust_v2_1_023538:
   limit_body_roll: [-0.4, 0.4]
   limit_body_height: [-0.2, 0.3]
 
+  # TEMPORARY: this old policy pitches opposite to the physical MPC target.
+  # Omit (or set false) when replacing it with a corrected RPY policy.
+  ocs2_legacy_pitch: true
+
   default_dof_pos: [0.1, 0.8, -1.5,
                     -0.1, 0.8, -1.5,
                     0.1, 1, -1.5,

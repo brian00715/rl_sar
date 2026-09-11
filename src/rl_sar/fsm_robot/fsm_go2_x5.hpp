@@ -426,6 +426,9 @@ public:
         rl.config_name = rl.params.Get<std::string>("config_name", "roboduet_stage1");
         try
         {
+            // Temporary, bundle-local workaround: a later corrected policy
+            // must not inherit the old model's reversed pitch convention.
+            rl.params.Set("ocs2_legacy_pitch", YAML::Node(false));
             rl.InitRL(rl.robot_name + "/" + rl.config_name);
             rl.now_state = *fsm_state;
         }
@@ -438,6 +441,13 @@ public:
         }
 
         num_arm_dofs_ = rl.params.Get<int>("num_arm_dofs", 0);
+        legacy_pitch_command_ = rl.params.Get<bool>("ocs2_legacy_pitch", false);
+        if (legacy_pitch_command_)
+        {
+            std::cout << LOGGER::NOTE
+                      << "[OCS2] Temporary legacy pitch inversion enabled for "
+                      << rl.config_name << std::endl;
+        }
         arm_begin_ = rl.params.Get<int>("num_of_dofs") - num_arm_dofs_;
         if (num_arm_dofs_ <= 0 || arm_begin_ < 0)
         {
@@ -593,7 +603,9 @@ private:
         rl.control.y = drive_planar ? cmd.base_lin_vel_body_xy[1] : 0.0f;
         rl.control.yaw = cmd.base_ang_vel_body_z;
         rl.control.body_height = cmd.body_height_cmd;
-        rl.control.body_pitch = cmd.body_pitch_cmd;
+        // MPC uses physical RPY; the selected legacy policy expects the
+        // opposite pitch command. Keep its trained observations untouched.
+        rl.control.body_pitch = legacy_pitch_command_ ? -cmd.body_pitch_cmd : cmd.body_pitch_cmd;
         rl.control.body_roll = cmd.body_roll_cmd;
 
         // KeyboardInterface() clamps at 20 Hz; this loop writes at the control
@@ -696,6 +708,7 @@ private:
     OCS2Bridge::LinkState last_link_ = OCS2Bridge::LinkState::WAITING;
 
     int num_arm_dofs_ = 0;
+    bool legacy_pitch_command_ = false;
     int arm_begin_ = 0;
     std::vector<float> arm_target_;
     std::vector<float> arm_target_dq_;
